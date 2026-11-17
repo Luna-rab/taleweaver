@@ -1,0 +1,50 @@
+services:
+  app:
+    image: mcr.microsoft.com/devcontainers/base:ubuntu
+    # devcontainer.json の workspaceFolder が /workspaces/<リポジトリ名> を指すので、親ディレクトリごとマウントする
+    volumes:
+      - ../..:/workspaces:cached
+    command: sleep infinity
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/taleweaver
+      TEST_DATABASE_URL: postgres://postgres:postgres@test_db:5432/taleweaver_test
+    depends_on:
+      db:
+        condition: service_healthy
+      test_db:
+        condition: service_healthy
+
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: taleweaver
+    # postgres:18 はデータを /var/lib/postgresql/18/docker に書く。/var/lib/postgresql/data にマウントするとデータがボリュームの外に出る
+    volumes:
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d taleweaver"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  test_db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: taleweaver_test
+    # テストのたびに捨ててよいデータなので、ボリュームに残さずメモリに置く
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d taleweaver_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  db-data:
