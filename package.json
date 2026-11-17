@@ -1,0 +1,18 @@
+{
+  "name": "taleweaver",
+  "private": true,
+  "workspaces": [
+    "backend"
+  ],
+  "type": "module",
+  "scripts": {
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
+  },
+  "devDependencies": {
+    "oxfmt": "^0.79.0",
+    "oxlint": "^1.94.0"
+  }
+}

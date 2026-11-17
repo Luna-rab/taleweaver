@@ -1,0 +1,10 @@
+{
+  "editor.defaultFormatter": "oxc.oxc-vscode",
+  // 保存時の整形は codeActionsOnSave で行う。formatOnSave と併用すると整形が二重に走り、lint の修正との順番も決められない
+  "editor.formatOnSave": false,
+  "editor.codeActionsOnSave": {
+    // 整形してから lint の自動修正をかける
+    "source.format.oxc": "always",
+    "source.fixAll.oxc": "always"
+  }
+}
