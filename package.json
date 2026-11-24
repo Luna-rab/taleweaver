@@ -2,7 +2,8 @@
   "name": "taleweaver",
   "private": true,
   "workspaces": [
-    "backend"
+    "backend",
+    "frontend"
   ],
   "type": "module",
   "scripts": {
