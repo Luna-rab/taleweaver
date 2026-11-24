@@ -176,3 +176,6 @@ dist
 .ionide
 
 # End of https://www.toptal.com/developers/gitignore/api/linux,node,visualstudiocode
+
+# Playwright MCP が書き出すスクリーンショット・ページのスナップショット・コンソールログ
+.playwright-mcp/
