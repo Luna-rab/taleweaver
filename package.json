@@ -7,12 +7,14 @@
   ],
   "type": "module",
   "scripts": {
+    "dev": "concurrently --names backend,frontend --pad-prefix --prefix-colors blue,green \"npm run dev -w backend\" \"npm run dev -w frontend\"",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "format": "oxfmt",
     "format:check": "oxfmt --check"
   },
   "devDependencies": {
+    "concurrently": "^10.0.7",
     "oxfmt": "^0.79.0",
     "oxlint": "^1.94.0"
   }
