@@ -1,5 +1,5 @@
 import { Outlet } from "react-router";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { Footer } from "./footer";
 import { Header } from "./header";
 
@@ -13,6 +13,8 @@ export function Layout() {
         <main className="flex min-h-full flex-col">
           <Outlet />
         </main>
+        {/* ScrollArea が自分で出すのは縦のスクロールバーだけ */}
+        <ScrollBar orientation="horizontal" />
       </ScrollArea>
       <Footer />
     </div>
