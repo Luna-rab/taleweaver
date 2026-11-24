@@ -6,5 +6,9 @@
     // 整形してから lint の自動修正をかける
     "source.format.oxc": "always",
     "source.fixAll.oxc": "always"
+  },
+  // VS Code 組み込みの CSS 検査は Tailwind の @theme や @apply を Unknown at rule と警告する。Tailwind CSS IntelliSense の言語モードで開くと警告が出ない
+  "files.associations": {
+    "*.css": "tailwindcss"
   }
 }

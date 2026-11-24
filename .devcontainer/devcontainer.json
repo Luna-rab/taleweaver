@@ -35,6 +35,9 @@
         "ms-azuretools.vscode-docker", //Docker
         //Typescript
         "oxc.oxc-vscode", //oxlint + oxfmt
+        //Frontend
+        "bradlc.vscode-tailwindcss", //Tailwind CSS IntelliSense
+        "vitest.explorer", //Vitest
         //Git
         "github.vscode-pull-request-github", //GitHub Pull Requests
         "donjayamanne.githistory", //Git History
