@@ -1,5 +1,7 @@
 import { Outlet } from "react-router";
+
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
+
 import { Footer } from "./footer";
 import { Header } from "./header";
 
