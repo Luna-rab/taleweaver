@@ -1,0 +1,9 @@
+import type { RouteObject } from "react-router";
+import { Home } from "@/routes/home";
+
+export const routes: RouteObject[] = [
+  {
+    path: "/",
+    element: <Home />,
+  },
+];
