@@ -13,6 +13,12 @@
   },
   "overrides": [
     {
+      "files": ["src/**"],
+      "rules": {
+        "import/no-relative-parent-imports": "error"
+      }
+    },
+    {
       "files": ["src/components/ui/**"],
       "rules": {
         "react/only-export-components": "off"
