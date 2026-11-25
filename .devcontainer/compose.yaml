@@ -44,5 +44,15 @@ services:
       timeout: 5s
       retries: 10
 
+  # Grand Archive のルールとカードを引く MCP サーバー。.mcp.json が http://ga-rules:8080/mcp に接続する。
+  # ホスト名に使うので、サービス名は test_db のような下線ではなくハイフンにする。
+  ga-rules:
+    build:
+      context: https://github.com/Luna-rab/ga-rules.git#main
+      args:
+        # イメージはビルドのときにルールとカードを取得して中に持つ。
+        # 新しいデータにするには、この値を変えて devcontainer をリビルドする。同じ値だとキャッシュが使われる。
+        DATA_VERSION: "20261125"
+
 volumes:
   db-data:

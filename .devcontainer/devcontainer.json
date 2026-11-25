@@ -4,7 +4,7 @@
   "name": "taleweaver",
   "dockerComposeFile": "compose.yaml",
   "service": "app",
-  "runServices": ["app", "db", "test_db"],
+  "runServices": ["app", "db", "test_db", "ga-rules"],
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
   "remoteUser": "vscode",
   // Features to add to the dev container. More info: https://containers.dev/features.

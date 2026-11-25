@@ -3,6 +3,10 @@
     "playwright": {
       "command": "npx",
       "args": ["playwright-mcp", "--headless", "--browser", "chromium", "--no-sandbox"]
+    },
+    "ga-rules": {
+      "type": "http",
+      "url": "http://ga-rules:8080/mcp"
     }
   }
 }
