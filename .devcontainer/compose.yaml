@@ -1,17 +1,21 @@
 services:
   app:
-    image: mcr.microsoft.com/devcontainers/base:ubuntu
+    build:
+      # Dockerfile が package-lock.json を読むので、ビルドの起点をリポジトリの直下にする。
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
     # devcontainer.json の workspaceFolder が /workspaces/<リポジトリ名> を指すので、親ディレクトリごとマウントする
     volumes:
       - ../..:/workspaces:cached
     command: sleep infinity
-    environment:
-      DATABASE_URL: postgres://postgres:postgres@db:5432/taleweaver
-      TEST_DATABASE_URL: postgres://postgres:postgres@test_db:5432/taleweaver_test
+    # アプリの設定は environment に書かず、backend/.env.development と frontend/.env.development に置く。
+    # ここに書くと、値を変えるたびに devcontainer のリビルドが要る。
     depends_on:
       db:
         condition: service_healthy
       test_db:
+        condition: service_healthy
+      storage:
         condition: service_healthy
 
   db:
@@ -54,5 +58,52 @@ services:
         # 新しいデータにするには、この値を変えて devcontainer をリビルドする。同じ値だとキャッシュが使われる。
         DATA_VERSION: "20261125"
 
+  # 画像を置く S3 互換のストレージ。本番の S3 や R2 の代わりに使う。
+  storage:
+    image: chrislusf/seaweedfs:4.55
+    command:
+      - mini
+      - -dir=/data
+      - -bucket=taleweaver-images
+      - -s3.config=/etc/seaweedfs/s3.json
+      - -master.telemetry=false
+      - -admin.ui=false
+      - -s3.port.iceberg=0
+      - -s3.port.lance=0
+    configs:
+      - source: storage-s3-identities
+        target: /etc/seaweedfs/s3.json
+    volumes:
+      # ファイルの中身だけでなく、どのバケットに何があるかの情報も /data に書かれる。
+      - storage-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8333/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+# 設定ファイルをリポジトリから bind マウントせず、ここに中身を書く。
+# リポジトリを Docker のボリュームにクローンした devcontainer では、bind マウントの元のパスが Docker ホストに無い。
+# Docker はそこに空のディレクトリを作ってマウントし、SeaweedFS は設定を読めずに終了する。
+configs:
+  # 書き込みには鍵を求め、taleweaver-images の読み取りだけは署名なしで通す。
+  # Vite の /images のプロキシは署名を付けずに中継するので、署名なしの読み取りが要る。
+  storage-s3-identities:
+    content: |
+      {
+        "identities": [
+          {
+            "name": "taleweaver",
+            "credentials": [{ "accessKey": "taleweaver", "secretKey": "taleweaver-secret" }],
+            "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+          },
+          {
+            "name": "anonymous",
+            "actions": ["Read:taleweaver-images"]
+          }
+        ]
+      }
+
 volumes:
   db-data:
+  storage-data:
