@@ -1,6 +1,11 @@
+import { existsSync } from "node:fs";
+
 import { defineConfig } from "drizzle-kit";
 
-// DATABASE_URL は .devcontainer/compose.yaml が app コンテナに渡す。
+// drizzle-kit は node の --env-file を受け取れないので、ここで読む。すでにある環境変数は上書きされない。
+// パスは drizzle-kit を実行する backend からの相対。
+if (existsSync(".env.development")) process.loadEnvFile(".env.development");
+
 // generate と check は DB に接続しないので、DATABASE_URL が無い環境（CI など）でも動くようにする。
 const url = process.env.DATABASE_URL;
 

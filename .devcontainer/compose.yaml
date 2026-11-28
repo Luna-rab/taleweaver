@@ -8,9 +8,8 @@ services:
     volumes:
       - ../..:/workspaces:cached
     command: sleep infinity
-    environment:
-      DATABASE_URL: postgres://postgres:postgres@db:5432/taleweaver
-      TEST_DATABASE_URL: postgres://postgres:postgres@test_db:5432/taleweaver_test
+    # アプリの設定は environment に書かず、backend/.env.development と frontend/.env.development に置く。
+    # ここに書くと、値を変えるたびに devcontainer のリビルドが要る。
     depends_on:
       db:
         condition: service_healthy
