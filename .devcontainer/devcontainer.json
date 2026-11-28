@@ -4,7 +4,7 @@
   "name": "taleweaver",
   "dockerComposeFile": "compose.yaml",
   "service": "app",
-  "runServices": ["app", "db", "test_db"],
+  "runServices": ["app", "db", "test_db", "ga-rules"],
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
   "remoteUser": "vscode",
   // Features to add to the dev container. More info: https://containers.dev/features.
@@ -35,6 +35,9 @@
         "ms-azuretools.vscode-docker", //Docker
         //Typescript
         "oxc.oxc-vscode", //oxlint + oxfmt
+        //Frontend
+        "bradlc.vscode-tailwindcss", //Tailwind CSS IntelliSense
+        "vitest.explorer", //Vitest
         //Git
         "github.vscode-pull-request-github", //GitHub Pull Requests
         "donjayamanne.githistory", //Git History

@@ -19,3 +19,9 @@ sudo chown "$(id -u):$(id -g)" "$HOME/.config"
 if gh auth status >/dev/null 2>&1; then
   gh auth setup-git
 fi
+
+npm ci
+
+# Playwright MCP (.mcp.json) が使う Chromium と、その実行に必要なシステムライブラリ・日本語フォントを入れる。
+# playwright コマンドは @playwright/mcp が依存する版なので、MCP が要求する Chromium のビルドと必ず一致する。
+npx playwright install --with-deps chromium

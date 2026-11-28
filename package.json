@@ -2,16 +2,20 @@
   "name": "taleweaver",
   "private": true,
   "workspaces": [
-    "backend"
+    "backend",
+    "frontend"
   ],
   "type": "module",
   "scripts": {
+    "dev": "concurrently --names backend,frontend --pad-prefix --prefix-colors blue,green \"npm run dev -w backend\" \"npm run dev -w frontend\"",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "format": "oxfmt",
     "format:check": "oxfmt --check"
   },
   "devDependencies": {
+    "@playwright/mcp": "^0.0.86",
+    "concurrently": "^10.0.7",
     "oxfmt": "^0.79.0",
     "oxlint": "^1.94.0"
   }

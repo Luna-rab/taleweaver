@@ -1,0 +1,6 @@
+{
+  // 本番の成果物を作る設定。drizzle.config.ts は開発時だけの drizzle-kit を読み込むので dist に出さない。
+  // 型検査は tsconfig.json（npm run typecheck）で drizzle.config.ts も含めて行う。
+  "extends": "./tsconfig.json",
+  "exclude": ["node_modules", "src/db/drizzle.config.ts"]
+}
