@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { CatalogFetch, CatalogSource } from "../../application/ports/catalog-source.js";
-import { fetchAllCards, type FetchedCards } from "./client.js";
+import type { FetchedCards } from "./client.js";
 import { collectSets, toCardSnapshot } from "./mappers.js";
 import { cardKeySchema, cardSchema } from "./schemas.js";
 
@@ -9,7 +9,7 @@ import { cardKeySchema, cardSchema } from "./schemas.js";
 export class GatcgCatalogSource implements CatalogSource {
   readonly #fetchCards: () => Promise<FetchedCards>;
 
-  constructor(fetchCards: () => Promise<FetchedCards> = () => fetchAllCards()) {
+  constructor(fetchCards: () => Promise<FetchedCards>) {
     this.#fetchCards = fetchCards;
   }
 

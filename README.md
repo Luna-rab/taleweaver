@@ -17,6 +17,8 @@ devcontainer で開くと、DB・テスト用の DB・画像のストレージ�
 
 取得元のカードを開発用の DB に取り込むには、`backend` で `npm run db:migrate` の後に `npm run sync:catalog` を実行する。
 
+`npm run sync` は `sync:catalog` と、イベントから積んだ仕事（画像の取得など）を処理する `events:process` を続けて動かす。仕事だけを処理し直すときは `npm run events:process` を実行する。
+
 - 開発の規約: [AGENTS.md](AGENTS.md)、[backend/AGENTS.md](backend/AGENTS.md)
 - 取得元のデータ: [backend/docs/gatcg-source.md](backend/docs/gatcg-source.md)
 - 集約の設計判断: [Card](backend/docs/card-aggregate.md)、[CardSet](backend/docs/card-set-aggregate.md)、[Image](backend/docs/image-aggregate.md)

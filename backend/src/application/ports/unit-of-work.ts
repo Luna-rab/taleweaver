@@ -15,7 +15,7 @@ export type Transaction = {
   readonly cards: CardRepository;
   readonly cardSets: CardSetRepository;
   readonly images: ImageRepository;
-  readonly events: EventWriter;
+  readonly events: EventStore;
 };
 
 export type AggregateRef = {
@@ -23,11 +23,16 @@ export type AggregateRef = {
   readonly id: string;
 };
 
-export interface EventWriter {
+export interface EventStore {
   /** 集約が出したイベントを書き、購読する処理の仕事を application/policies/subscriptions.ts のとおりに積む。 */
   append(
     aggregate: AggregateRef,
     events: readonly { readonly type: string }[],
     occurredAt: Date,
   ): Promise<void>;
+  /**
+   * 書いたイベントを、集約が出したときの形で読む。日時は ISO 8601 の文字列になっているので、
+   * 日時を持つイベントを読むときは直してから使う。
+   */
+  findById(id: string): Promise<{ readonly type: string } | null>;
 }

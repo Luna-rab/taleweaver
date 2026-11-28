@@ -11,12 +11,16 @@
     "db:generate": "drizzle-kit generate --config src/db/drizzle.config.ts",
     "db:migrate": "drizzle-kit migrate --config src/db/drizzle.config.ts",
     "db:check": "drizzle-kit check --config src/db/drizzle.config.ts",
-    "sync:catalog": "tsx --env-file-if-exists=.env.development src/presentation/cli/sync-catalog.ts"
+    "sync:catalog": "tsx --env-file-if-exists=.env.development src/presentation/cli/sync-catalog.ts",
+    "events:process": "tsx --env-file-if-exists=.env.development src/presentation/cli/process-events.ts",
+    "sync": "tsx --env-file-if-exists=.env.development src/presentation/cli/sync.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1179.0",
     "@hono/node-server": "^2.1.3",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.16",
+    "image-size": "^2.2.0",
     "pg": "^8.23.1",
     "zod": "^4.6.7"
   },
