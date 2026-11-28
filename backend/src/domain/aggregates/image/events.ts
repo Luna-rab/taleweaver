@@ -20,26 +20,4 @@ export type ImageReplaced = {
   readonly image: Image;
 };
 
-/** 取得元が 304 を返した。 */
-export type ImageUnchanged = {
-  readonly type: "ImageUnchanged";
-  readonly imageId: ImageId;
-};
-
-/**
- * 取得元に画像が無いか、画像として受け付けられないので、反映を拒否した。状態は前回のまま。
- * 登録を拒否したときは imageId が null。
- */
-export type ImageSyncRejected = {
-  readonly type: "ImageSyncRejected";
-  readonly imageId: ImageId | null;
-  readonly sourceUrl: string;
-  readonly reason: string;
-};
-
-export type ImageEvent = ImageRegistered | ImageReplaced | ImageUnchanged | ImageSyncRejected;
-
-/** 状態を変えたイベントか。application は、これに当たるイベントがあれば repository.save を呼ぶ。 */
-export function changesState(event: ImageEvent): boolean {
-  return event.type !== "ImageUnchanged" && event.type !== "ImageSyncRejected";
-}
+export type ImageEvent = ImageRegistered | ImageReplaced;

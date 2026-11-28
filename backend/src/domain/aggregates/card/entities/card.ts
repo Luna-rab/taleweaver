@@ -11,8 +11,9 @@ import type { CardFace } from "./card-face.js";
  */
 export type Card = {
   readonly id: CardId;
-  /** 表、裏の順。片面のカードは表だけ。 */
-  readonly faces: readonly CardFace[];
+  readonly front: CardFace;
+  /** 片面のカードは null。 */
+  readonly back: CardFace | null;
   readonly legality: Legality;
   /** 取得元の並び順のまま持つ。 */
   readonly rulings: readonly Ruling[];
@@ -22,9 +23,3 @@ export type Card = {
   /** 取得元から消えた時刻。 */
   readonly withdrawnAt: Date | null;
 };
-
-export function frontFace(card: { readonly faces: readonly CardFace[] }): CardFace {
-  const face = card.faces.find((f) => f.side === "front");
-  if (!face) throw new Error("表の面がないカードの状態は作れない");
-  return face;
-}

@@ -1,4 +1,5 @@
 import { type Brand, createBrand } from "./utils/brand.js";
+import { isListed } from "./utils/list.js";
 import { ensure } from "./utils/rule-violation.js";
 
 // 総合ルールの一覧（type-list#Types）に TOKEN を足したもの。取得元は大文字で返す。
@@ -29,12 +30,8 @@ export type CardType = Brand<(typeof TYPES)[number], "CardType">;
 
 const brand = createBrand<CardType>();
 
-// 取得元の文字列を受け取る。一覧にない値は zod ではなくここで拒否し、そのカードを CardSyncRejected にする。
+// 取得元の文字列を受け取る。一覧にない値は zod ではなくここで拒否し、Card 集約がそのカードの同期を rejected にする。
 export function CardType(v: string): CardType {
-  ensure(isListed(v), `総合ルールにない type: ${v}`);
+  ensure(isListed(TYPES, v), `総合ルールにない type: ${v}`);
   return brand(v);
-}
-
-function isListed(v: string): v is (typeof TYPES)[number] {
-  return TYPES.some((t) => t === v);
 }

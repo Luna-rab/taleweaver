@@ -7,12 +7,11 @@ import type { ImageId } from "../../value-objects/image-id.js";
 import type { ImageSourcePath } from "../../value-objects/image-source-path.js";
 import type { Ruling } from "../../value-objects/ruling.js";
 import type { SourceId } from "../../value-objects/source-id.js";
-import type { LegalityChange } from "./card-aggregate.js";
 import type { CardEdition } from "./entities/card-edition.js";
 import type { CardFace } from "./entities/card-face.js";
 import type { Card } from "./entities/card.js";
 
-// コマンドを処理したら、何が起きたかを必ずイベントで返す。変更がなかったことや拒否したことも含む。
+// イベントは状態を変えた事実だけを表す。
 // 状態の変化はどれも、いずれかのイベントで表す（購読する処理がまだないイベントもある）。
 // 1 回のコマンドで、変わった部分ごとに複数のイベントが出ることがある。
 
@@ -21,23 +20,6 @@ export type CardRegistered = {
   readonly type: "CardRegistered";
   readonly cardId: CardId;
   readonly card: Card;
-};
-
-/** 同期した結果が今の状態と同じだった。または、取り下げ済みのカードをもう一度取り下げようとした。 */
-export type CardUnchanged = {
-  readonly type: "CardUnchanged";
-  readonly cardId: CardId;
-};
-
-/**
- * 取得元のデータが業務の規則に合わないので、同期を拒否した。状態は前回のまま。
- * 照合の前に拒否したときは cardId が null。sourceId は検証前の値なので文字列で持つ。
- */
-export type CardSyncRejected = {
-  readonly type: "CardSyncRejected";
-  readonly cardId: CardId | null;
-  readonly frontSourceId: string;
-  readonly reason: string;
 };
 
 /** 面のルールに関わる特性が変わった。 */
@@ -91,6 +73,14 @@ export type CardLegalityChanged = {
   readonly type: "CardLegalityChanged";
   readonly cardId: CardId;
   readonly changes: readonly LegalityChange[];
+};
+
+/** CardLegalityChanged に載せる、1 フォーマット分の上限の変化。 */
+export type LegalityChange = {
+  readonly format: string;
+  /** null は制限なし。 */
+  readonly before: number | null;
+  readonly after: number | null;
 };
 
 /** エディションが増えた。画像を初めて取得する起点。 */
@@ -152,8 +142,6 @@ export type CardReinstated = {
 
 export type CardEvent =
   | CardRegistered
-  | CardUnchanged
-  | CardSyncRejected
   | CardCharacteristicsChanged
   | CardFaceRevised
   | CardRulingAdded
@@ -168,8 +156,3 @@ export type CardEvent =
   | CardEditionImageAttached
   | CardWithdrawn
   | CardReinstated;
-
-/** 状態を変えたイベントか。application は、これに当たるイベントが 1 つでもあれば repository.save を呼ぶ。 */
-export function changesState(event: CardEvent): boolean {
-  return event.type !== "CardUnchanged" && event.type !== "CardSyncRejected";
-}

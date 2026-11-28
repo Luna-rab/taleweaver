@@ -7,6 +7,7 @@ import { CardId } from "../../value-objects/card-id.js";
 import { CardSetId } from "../../value-objects/card-set-id.js";
 import { FaceSide } from "../../value-objects/face-side.js";
 import { ImageId } from "../../value-objects/image-id.js";
+import type { Decision } from "../decision.js";
 import { CardAggregate } from "./card-aggregate.js";
 import type {
   CardCommand,
@@ -14,9 +15,8 @@ import type {
   CardEditionSnapshot,
   CardSnapshot,
 } from "./commands.js";
-import { frontEditionFace } from "./entities/card-edition.js";
-import { type Card, frontFace } from "./entities/card.js";
-import { type CardEvent, changesState } from "./events.js";
+import type { Card } from "./entities/card.js";
+import type { CardEvent } from "./events.js";
 import type { CardOperations } from "./operations.js";
 
 const SET_ID = CardSetId(randomUUID());
@@ -82,14 +82,14 @@ function withFront(base: CardSnapshot, front: Partial<CardSnapshot["front"]>): C
   return { ...base, front: { ...base.front, ...front } };
 }
 
-/** メモリ上の repository。application と同じく、changesState に当たるイベントがあれば保存する。 */
+/** メモリ上の repository。application と同じく、accepted の events が空でなければ保存する。 */
 function store(currentFetch: ReadonlySet<string> = new Set()) {
   const cards = new Map<string, Card>();
   const ops: CardOperations = {
     findById: async (id) => cards.get(id) ?? null,
     findByFrontSourceId: async (s) =>
-      [...cards.values()].find((c) => frontFace(c).sourceId === s) ?? null,
-    findByFrontSlug: async (s) => [...cards.values()].find((c) => frontFace(c).slug === s) ?? null,
+      [...cards.values()].find((c) => c.front.sourceId === s) ?? null,
+    findByFrontSlug: async (s) => [...cards.values()].find((c) => c.front.slug === s) ?? null,
     isInCurrentFetch: async (s) => currentFetch.has(s),
     findSetIdBySourceId: async (s) => (s === "set-1" ? SET_ID : null),
     newCardId: () => CardId(randomUUID()),
@@ -97,40 +97,54 @@ function store(currentFetch: ReadonlySet<string> = new Set()) {
   };
   const run = async (command: CardCommand) => {
     const card = new CardAggregate(ops);
-    const events = await card.execute(command);
-    if (events.some(changesState) && card.state) cards.set(card.state.id, card.state);
-    return { card, events };
+    const decision = await card.execute(command);
+    if (decision.kind === "accepted" && decision.events.length > 0 && card.state) {
+      cards.set(card.state.id, card.state);
+    }
+    return { card, decision };
   };
   const sync = (s: CardSnapshot) => run({ type: "SyncCard", snapshot: s, syncedAt: SYNCED_AT });
   return { cards, run, sync };
 }
 
-const types = (events: readonly CardEvent[]) => events.map((e) => e.type);
+/** accepted の events を返す。rejected なら reason を載せて失敗させる。 */
+function eventsOf(decision: Decision<CardEvent>): readonly CardEvent[] {
+  if (decision.kind === "rejected") throw new Error(`rejected: ${decision.reason}`);
+  return decision.events;
+}
+
+const types = (decision: Decision<CardEvent>) => eventsOf(decision).map((e) => e.type);
+
+const unchanged = { kind: "accepted", events: [] };
+
+const rejectedWith = (reason: string) => ({
+  kind: "rejected",
+  reason: expect.stringContaining(reason),
+});
 
 describe("SyncCard", () => {
   it("新しいカードは CardRegistered だけを出し、裁定やエディションのイベントは出さない", async () => {
     const { sync } = store();
-    const { card, events } = await sync(snapshot());
-    expect(types(events)).toEqual(["CardRegistered"]);
+    const { card, decision } = await sync(snapshot());
+    expect(types(decision)).toEqual(["CardRegistered"]);
     expect(card.state?.editions).toHaveLength(1);
   });
 
-  it("同じスナップショットをもう一度送ると CardUnchanged を出し、状態を変えない", async () => {
+  it("同じスナップショットをもう一度送ると、イベントを出さずに受け付け、状態を変えない", async () => {
     const { sync } = store();
     const first = await sync(snapshot());
-    const { card, events } = await sync(snapshot());
-    expect(types(events)).toEqual(["CardUnchanged"]);
-    expect(events.some(changesState)).toBe(false);
+    const { card, decision } = await sync(snapshot());
+    expect(decision).toEqual(unchanged);
     expect(card.state).toEqual(first.card.state);
   });
 
   it("面のルールに関わらない値が変わると CardFaceRevised を出す", async () => {
     const { sync } = store();
     await sync(snapshot());
-    const { events } = await sync(
+    const { decision } = await sync(
       withFront(snapshot(), { slug: "lorraine-blademaster-2", effectRaw: "x" }),
     );
-    expect(events).toMatchObject([
+    expect(eventsOf(decision)).toMatchObject([
       { type: "CardFaceRevised", side: "front", after: { effectRaw: "x" } },
     ]);
   });
@@ -138,8 +152,8 @@ describe("SyncCard", () => {
   it("コストが変わると CardCharacteristicsChanged を出す", async () => {
     const { sync } = store();
     await sync(snapshot());
-    const { events } = await sync(withFront(snapshot(), { cost: { type: "memory", value: 3 } }));
-    expect(events).toMatchObject([
+    const { decision } = await sync(withFront(snapshot(), { cost: { type: "memory", value: 3 } }));
+    expect(eventsOf(decision)).toMatchObject([
       {
         type: "CardCharacteristicsChanged",
         side: "front",
@@ -156,8 +170,8 @@ describe("SyncCard", () => {
       ...snapshot().rulings,
       { title: "ERRATA, DTR", addedOn: "2026-11-01", description: "Memory cost 2 -> 3" },
     ];
-    const { events } = await sync(snapshot({ rulings }));
-    expect(events).toMatchObject([
+    const { decision } = await sync(snapshot({ rulings }));
+    expect(eventsOf(decision)).toMatchObject([
       { type: "CardRulingAdded", isErrata: true, ruling: { title: "ERRATA, DTR" } },
     ]);
   });
@@ -171,10 +185,10 @@ describe("SyncCard", () => {
     await sync(snapshot({ rulings: two }));
 
     const reordered = await sync(snapshot({ rulings: two.toReversed() }));
-    expect(types(reordered.events)).toEqual(["CardRulingsReordered"]);
+    expect(types(reordered.decision)).toEqual(["CardRulingsReordered"]);
 
     const removed = await sync(snapshot({ rulings: [two[0]!] }));
-    expect(removed.events).toMatchObject([
+    expect(eventsOf(removed.decision)).toMatchObject([
       { type: "CardRulingRemoved", ruling: { description: "B." } },
     ]);
   });
@@ -182,10 +196,10 @@ describe("SyncCard", () => {
   it("参照が変わると、増えた参照と消えた参照を CardReferencesChanged に載せる", async () => {
     const { sync } = store();
     await sync(snapshot());
-    const { events } = await sync(
+    const { decision } = await sync(
       snapshot({ references: [{ kind: "MASTERY", targetSlug: "fractured-memories" }] }),
     );
-    expect(events).toMatchObject([
+    expect(eventsOf(decision)).toMatchObject([
       {
         type: "CardReferencesChanged",
         added: [{ targetSlug: "fractured-memories" }],
@@ -197,8 +211,8 @@ describe("SyncCard", () => {
   it("禁止・制限が変わると、変わったフォーマットだけを CardLegalityChanged に載せる", async () => {
     const { sync } = store();
     await sync(snapshot({ legality: { DRAFT: 0 } }));
-    const { events } = await sync(snapshot({ legality: { DRAFT: 0, STANDARD: 0 } }));
-    expect(events).toMatchObject([
+    const { decision } = await sync(snapshot({ legality: { DRAFT: 0, STANDARD: 0 } }));
+    expect(eventsOf(decision)).toMatchObject([
       { type: "CardLegalityChanged", changes: [{ format: "STANDARD", before: null, after: 0 }] },
     ]);
   });
@@ -210,77 +224,74 @@ describe("SyncCard", () => {
     const added = await sync(
       snapshot({ editions: [edition("ed-1", { isDefault: true }), edition("ed-2")] }),
     );
-    expect(types(added.events)).toEqual(["CardEditionAdded"]);
+    expect(types(added.decision)).toEqual(["CardEditionAdded"]);
 
     const removed = await sync(snapshot({ editions: [edition("ed-2", { isDefault: true })] }));
-    expect(types(removed.events).toSorted()).toEqual([
+    expect(types(removed.decision).toSorted()).toEqual([
       "CardEditionRevised",
       "CardEditionWithdrawn",
     ]);
-    const ed1 = removed.card.state?.editions.find((e) => frontEditionFace(e).sourceId === "ed-1");
+    const ed1 = removed.card.state?.editions.find((e) => e.front.sourceId === "ed-1");
     expect(ed1).toMatchObject({ isDefault: false, withdrawnAt: SYNCED_AT });
 
     const back = await sync(
       snapshot({ editions: [edition("ed-1"), edition("ed-2", { isDefault: true })] }),
     );
-    expect(types(back.events)).toEqual(["CardEditionReinstated"]);
+    expect(types(back.decision)).toEqual(["CardEditionReinstated"]);
     expect(back.card.state?.editions.every((e) => e.withdrawnAt === null)).toBe(true);
   });
 
   it("取得元が id を振り直しても、slug で同じカードとして照合し、sourceId を書き換える", async () => {
     const { sync } = store();
     const first = await sync(snapshot());
-    const { card, events } = await sync(withFront(snapshot(), { sourceId: "NewId99" }));
-    expect(events).toMatchObject([{ type: "CardFaceRevised", after: { sourceId: "NewId99" } }]);
+    const { card, decision } = await sync(withFront(snapshot(), { sourceId: "NewId99" }));
+    expect(eventsOf(decision)).toMatchObject([
+      { type: "CardFaceRevised", after: { sourceId: "NewId99" } },
+    ]);
     expect(card.state?.id).toBe(first.card.state?.id);
   });
 
   it("slug で見つかったカードの元の sourceId が今回の取得に残っていれば拒否する", async () => {
     const { cards, sync } = store(new Set(["AbC123"]));
     await sync(snapshot());
-    const { events } = await sync(withFront(snapshot(), { sourceId: "NewId99" }));
-    // NewId99 は slug が重なった別のカードなので、見つけたカードの id は載せない。
-    expect(events).toMatchObject([
-      { type: "CardSyncRejected", cardId: null, frontSourceId: "NewId99" },
-    ]);
-    expect([...cards.values()].map((c) => frontFace(c).sourceId)).toEqual(["AbC123"]);
+    const { card, decision } = await sync(withFront(snapshot(), { sourceId: "NewId99" }));
+    // NewId99 は slug が重なった別のカードなので、見つけたカードには結び付けない。
+    expect(decision).toEqual(
+      rejectedWith("slug lorraine-blademaster のカードは sourceId AbC123 で既にあり"),
+    );
+    expect(card.state).toBeNull();
+    expect([...cards.values()].map((c) => c.front.sourceId)).toEqual(["AbC123"]);
   });
 
-  it("業務の規則に合わないカードは CardSyncRejected を出し、状態を変えない", async () => {
+  it("業務の規則に合わないカードは rejected にし、状態を変えない", async () => {
     const { sync } = store();
     await sync(snapshot());
-    const { card, events } = await sync(withFront(snapshot(), { level: null }));
-    expect(events).toEqual([
-      {
-        type: "CardSyncRejected",
-        cardId: null,
-        frontSourceId: "AbC123",
-        reason: "CHAMPION は level を持つ",
-      },
-    ]);
-    expect(events.some(changesState)).toBe(false);
+    const { card, decision } = await sync(withFront(snapshot(), { level: null }));
+    expect(decision).toEqual({ kind: "rejected", reason: "CHAMPION は level を持つ" });
     // 照合の前（スナップショットを読む段階）で拒否したので、保存済みのカードも読んでいない。
     expect(card.state).toBeNull();
   });
 
-  it("総合ルールの一覧にない属性・class・type のカードは CardSyncRejected にする", async () => {
+  it("総合ルールの一覧にない属性・class・type のカードは rejected にする", async () => {
     const { sync } = store();
     for (const [field, value, reason] of [
       ["elements", "AQUA", "総合ルールにない属性: AQUA"],
       ["classes", "BARD", "総合ルールにない class: BARD"],
       ["types", "RELIC", "総合ルールにない type: RELIC"],
     ] as const) {
-      const { events } = await sync(withFront(snapshot(), { [field]: [value] }));
-      expect(events).toMatchObject([{ type: "CardSyncRejected", reason }]);
+      const { decision } = await sync(withFront(snapshot(), { [field]: [value] }));
+      expect(decision).toEqual({ kind: "rejected", reason });
     }
   });
 
-  it("照合した後に拒否したときは、CardSyncRejected に cardId を載せ、state は変えない", async () => {
-    const { sync } = store();
-    const registered = await sync(snapshot());
-    // ed-2 の slug は既存の ed-1 と同じで、ed-1 の sourceId も取得に残っている。
+  it("保存済みのカードと照合した後に拒否しても、保存済みのカードは変えない", async () => {
+    const { cards, sync } = store();
+    await sync(snapshot());
+    const saved = structuredClone([...cards.values()]);
+    // ed-2 の slug は保存済みの ed-1 と同じで、ed-1 の sourceId も取得に残っている。
+    // この衝突は保存済みのカードのエディションと比べて初めて分かるので、照合の後の拒否になる。
     const clash = edition("ed-2");
-    const { card, events } = await sync(
+    const { card, decision } = await sync(
       snapshot({
         editions: [
           edition("ed-1", { isDefault: true }),
@@ -288,9 +299,11 @@ describe("SyncCard", () => {
         ],
       }),
     );
-    expect(events).toMatchObject([{ type: "CardSyncRejected", cardId: registered.card.state!.id }]);
-    // 新しいインスタンスなので、拒否の前の state は null。照合したカードに結び付かない。
+    expect(decision).toEqual(
+      rejectedWith("エディションの slug ed-1-slug は sourceId ed-1 で既にあり"),
+    );
     expect(card.state).toBeNull();
+    expect([...cards.values()]).toEqual(saved);
   });
 
   it("両面カードを登録でき、裏面の特性が変わると side: back のイベントを出す", async () => {
@@ -302,9 +315,9 @@ describe("SyncCard", () => {
       back: { ...back, power },
       editions: [edition("ed-1", { isDefault: true, back: editionFace("ed-1-back") })],
     });
-    expect(types((await sync(twoFaced(null))).events)).toEqual(["CardRegistered"]);
-    const { events } = await sync(twoFaced(5));
-    expect(events).toMatchObject([
+    expect(types((await sync(twoFaced(null))).decision)).toEqual(["CardRegistered"]);
+    const { decision } = await sync(twoFaced(5));
+    expect(eventsOf(decision)).toMatchObject([
       { type: "CardCharacteristicsChanged", side: "back", after: { power: 5 } },
     ]);
   });
@@ -314,14 +327,14 @@ describe("SyncCard", () => {
     const first = await sync(snapshot());
     const renamed = edition("ed-1", { isDefault: true });
     const reassigned = { ...renamed, front: { ...renamed.front, sourceId: "ed-1-new" } };
-    const { card, events } = await sync(snapshot({ editions: [reassigned] }));
-    expect(types(events)).toEqual(["CardEditionRevised"]);
+    const { card, decision } = await sync(snapshot({ editions: [reassigned] }));
+    expect(types(decision)).toEqual(["CardEditionRevised"]);
     expect(card.state?.editions.map((e) => e.id)).toEqual(
       first.card.state?.editions.map((e) => e.id),
     );
   });
 
-  it("repository が参照やエディションを別の順で返しても CardUnchanged になる", async () => {
+  it("repository が参照やエディションを別の順で返しても、イベントを出さない", async () => {
     const { cards, sync } = store();
     const refs = [
       { kind: "SUMMON", targetSlug: "b" },
@@ -335,10 +348,10 @@ describe("SyncCard", () => {
       references: stored.references.toReversed(),
       editions: stored.editions.toReversed(),
     });
-    const { events } = await sync(
+    const { decision } = await sync(
       snapshot({ references: refs.toReversed(), editions: editions.toReversed() }),
     );
-    expect(types(events)).toEqual(["CardUnchanged"]);
+    expect(decision).toEqual(unchanged);
   });
 
   it("エディションの面の組がカードの面の組とそろわなければ拒否する", async () => {
@@ -348,8 +361,8 @@ describe("SyncCard", () => {
       ...base,
       back: { ...base.front, sourceId: "Back1", slug: "back-slug" },
     };
-    const { events } = await sync(twoFaced);
-    expect(types(events)).toEqual(["CardSyncRejected"]);
+    const { decision } = await sync(twoFaced);
+    expect(decision).toEqual(rejectedWith("の面の組がカードの面の組とそろわない"));
   });
 
   it("セットが同期されていなければ、拒否ではなく例外を投げる", async () => {
@@ -361,20 +374,20 @@ describe("SyncCard", () => {
 });
 
 describe("WithdrawCard", () => {
-  it("取り下げると CardWithdrawn、2 回目は CardUnchanged、取得元に戻ると CardReinstated を出す", async () => {
+  it("取り下げると CardWithdrawn、2 回目はイベントなし、取得元に戻ると CardReinstated を出す", async () => {
     const { run, sync } = store();
     const registered = await sync(snapshot());
     const cardId = registered.card.state!.id;
 
     const withdrawn = await run({ type: "WithdrawCard", cardId, withdrawnAt: SYNCED_AT });
-    expect(types(withdrawn.events)).toEqual(["CardWithdrawn"]);
+    expect(types(withdrawn.decision)).toEqual(["CardWithdrawn"]);
     expect(withdrawn.card.state?.withdrawnAt).toEqual(SYNCED_AT);
 
     const again = await run({ type: "WithdrawCard", cardId, withdrawnAt: SYNCED_AT });
-    expect(types(again.events)).toEqual(["CardUnchanged"]);
+    expect(again.decision).toEqual(unchanged);
 
     const reinstated = await sync(snapshot());
-    expect(types(reinstated.events)).toEqual(["CardReinstated"]);
+    expect(types(reinstated.decision)).toEqual(["CardReinstated"]);
     expect(reinstated.card.state?.withdrawnAt).toBeNull();
   });
 
@@ -403,8 +416,10 @@ describe("AttachEditionImage", () => {
       });
 
     const attached = await attach();
-    expect(attached.events).toMatchObject([{ type: "CardEditionImageAttached", imageId }]);
-    expect(types((await attach()).events)).toEqual(["CardUnchanged"]);
+    expect(eventsOf(attached.decision)).toMatchObject([
+      { type: "CardEditionImageAttached", imageId },
+    ]);
+    expect((await attach()).decision).toEqual(unchanged);
     await expect(
       run({
         type: "AttachEditionImage",
@@ -416,8 +431,8 @@ describe("AttachEditionImage", () => {
     ).rejects.toThrow("既に画像");
 
     const resynced = await sync(snapshot());
-    expect(types(resynced.events)).toEqual(["CardUnchanged"]);
-    expect(resynced.card.state?.editions[0]?.faces[0]?.imageId).toBe(imageId);
+    expect(resynced.decision).toEqual(unchanged);
+    expect(resynced.card.state?.editions[0]?.front.imageId).toBe(imageId);
   });
 
   it("カードにない面に結び付けようとすると、拒否ではなく例外を投げる", async () => {

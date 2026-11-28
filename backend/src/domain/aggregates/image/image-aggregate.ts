@@ -4,7 +4,8 @@ import { ImageContentType } from "../../value-objects/image-content-type.js";
 import { ImageDimensions } from "../../value-objects/image-dimensions.js";
 import type { ImageId } from "../../value-objects/image-id.js";
 import { ImageSourceUrl } from "../../value-objects/image-source-url.js";
-import { ensure, RuleViolation } from "../../value-objects/utils/rule-violation.js";
+import { ensure } from "../../value-objects/utils/rule-violation.js";
+import { accepted, type Decision, decide } from "../decision.js";
 import type {
   FetchedSourceImage,
   ImageCommand,
@@ -18,9 +19,7 @@ import type { ImageOperations } from "./operations.js";
 
 /**
  * 自前のストレージに保存した画像を扱う集約。ファイルの読み書きはせず、取得した結果からイベントと次の状態を決める。
- *
- * execute は何が起きたかを必ず 1 件以上のイベントで返す。
- * application は changesState に当たるイベントがあれば、ファイルを置いてから state を repository.save に渡す。
+ * application は、accepted の events が空でなければ、ファイルを置いてから state を repository.save に渡す。
  *
  * 1 つのインスタンスは 1 つの画像だけを扱う。別の画像のコマンドが送られたら例外を投げる。
  */
@@ -37,41 +36,34 @@ export class ImageAggregate {
     return this.#state;
   }
 
-  async execute(command: ImageCommand): Promise<readonly ImageEvent[]> {
+  async execute(command: ImageCommand): Promise<Decision<ImageEvent>> {
     switch (command.type) {
       case "RegisterSourceImage":
-        return this.#register(command);
+        return await this.#register(command);
       case "RefreshSourceImage":
         return await this.#refresh(command);
     }
   }
 
   /** 取得元の画像を新しい画像として登録する。取得元に無いか、画像として受け付けられなければ拒否する。 */
-  #register(command: RegisterSourceImage): readonly ImageEvent[] {
+  async #register(command: RegisterSourceImage): Promise<Decision<ImageEvent>> {
     if (this.#state !== null) {
       throw new Error(`画像 ${this.#state.id} を扱うインスタンスに、新しい画像の登録が送られた`);
     }
-    try {
-      const { etag, ...file } = parseFetched(command.fetched);
+    return await decide(() => {
+      const fetched = parseFetched(command.fetched);
       const id = this.#ops.newImageId();
-      const image: Image = {
-        id,
-        storageKey: this.#ops.newStorageKey(id, file.contentType),
-        ...file,
-        source: { url: ImageSourceUrl(command.sourceUrl), etag },
-      };
+      const image = this.#toImage(id, ImageSourceUrl(command.sourceUrl), fetched);
       this.#state = image;
       return [{ type: "ImageRegistered", imageId: id, image }];
-    } catch (error) {
-      return rejection(error, command.sourceUrl, null);
-    }
+    });
   }
 
   /**
-   * 保存済みの画像を取得元に問い合わせた結果を反映する。304 なら ImageUnchanged、取得できれば新しいキーで
+   * 保存済みの画像を取得元に問い合わせた結果を反映する。304 なら空の events、取得できれば新しいキーで
    * ImageReplaced を返す。取得元から消えていたら拒否し、保存済みの画像は残す。
    */
-  async #refresh(command: RefreshSourceImage): Promise<readonly ImageEvent[]> {
+  async #refresh(command: RefreshSourceImage): Promise<Decision<ImageEvent>> {
     const existing = await this.#load(command.imageId);
     this.#state = existing;
     if (existing.source === null) {
@@ -83,16 +75,11 @@ export class ImageAggregate {
       if (url !== existing.source.url) {
         throw new Error(`画像 ${existing.id} の取得元が変わったのに、前の ETag で問い合わせた`);
       }
-      return [{ type: "ImageUnchanged", imageId: existing.id }];
+      return accepted([]);
     }
-    try {
-      const { etag, ...file } = parseFetched(command.fetched);
-      const image: Image = {
-        id: existing.id,
-        storageKey: this.#ops.newStorageKey(existing.id, file.contentType),
-        ...file,
-        source: { url, etag },
-      };
+    const fetched = command.fetched;
+    return await decide(() => {
+      const image = this.#toImage(existing.id, url, parseFetched(fetched));
       this.#state = image;
       return [
         {
@@ -102,9 +89,17 @@ export class ImageAggregate {
           image,
         },
       ];
-    } catch (error) {
-      return rejection(error, command.sourceUrl, existing.id);
-    }
+    });
+  }
+
+  /** 取得した画像に新しいストレージのキーを振る。 */
+  #toImage(id: ImageId, url: ImageSourceUrl, { etag, ...file }: ParsedFetched): Image {
+    return {
+      id,
+      storageKey: this.#ops.newStorageKey(id, file.contentType),
+      ...file,
+      source: { url, etag },
+    };
   }
 
   /** id を指定したコマンドの対象を読む。別の画像を扱うインスタンスに送られたら、application の誤りとして例外にする。 */
@@ -120,6 +115,8 @@ export class ImageAggregate {
   }
 }
 
+type ParsedFetched = ReturnType<typeof parseFetched>;
+
 /** 取得した結果を value object に変える。取得元に無いか、画像として受け付けられなければ RuleViolation を投げる。 */
 function parseFetched(fetched: FetchedSourceImage | SourceImageNotFound) {
   ensure(fetched.kind === "fetched", "取得元に画像がない");
@@ -129,10 +126,4 @@ function parseFetched(fetched: FetchedSourceImage | SourceImageNotFound) {
     byteSize: ByteSize(fetched.byteSize),
     etag: fetched.etag === null ? null : ETag(fetched.etag),
   };
-}
-
-/** RuleViolation を ImageSyncRejected に変える。それ以外の例外は業務の結果ではないので、そのまま投げる。 */
-function rejection(error: unknown, sourceUrl: string, imageId: ImageId | null): ImageEvent[] {
-  if (!(error instanceof RuleViolation)) throw error;
-  return [{ type: "ImageSyncRejected", imageId, sourceUrl, reason: error.message }];
 }
