@@ -1,5 +1,4 @@
 import { Collaborator } from "../../../value-objects/collaborator.js";
-import type { FaceSide } from "../../../value-objects/face-side.js";
 import { FlavorText } from "../../../value-objects/flavor-text.js";
 import { Illustrator } from "../../../value-objects/illustrator.js";
 import type { ImageId } from "../../../value-objects/image-id.js";
@@ -9,12 +8,11 @@ import { SourceId } from "../../../value-objects/source-id.js";
 import type { CardEditionFaceSnapshot } from "../commands.js";
 
 /**
- * エディションの面。エディションの中では side（表か裏か）で区別する。
+ * エディションの面。表か裏かは CardEdition の front・back のどちらに置くかで決まる。
  * 画像はこの面に結び付けるので、絵やフレーバーが変わっても同じ面として追う。
  * 面の組はカードの面の組とそろう。
  */
 export type CardEditionFace = {
-  readonly side: FaceSide;
   readonly sourceId: SourceId;
   readonly slug: Slug;
   readonly illustrator: Illustrator | null;
@@ -30,12 +28,8 @@ export type CardEditionFace = {
 export type ParsedCardEditionFace = Omit<CardEditionFace, "imageId">;
 
 /** 業務の規則に合わない値があれば RuleViolation を投げる。 */
-export function parseCardEditionFace(
-  face: CardEditionFaceSnapshot,
-  side: FaceSide,
-): ParsedCardEditionFace {
+export function parseCardEditionFace(face: CardEditionFaceSnapshot): ParsedCardEditionFace {
   return {
-    side,
     sourceId: SourceId(face.sourceId),
     slug: Slug(face.slug),
     illustrator: face.illustrator === null ? null : Illustrator(face.illustrator),

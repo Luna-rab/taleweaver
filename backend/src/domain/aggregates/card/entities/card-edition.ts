@@ -17,14 +17,7 @@ export type CardEdition = {
   readonly isDefault: boolean;
   /** 取得元から消えた時刻。 */
   readonly withdrawnAt: Date | null;
-  /** 表、裏の順。 */
-  readonly faces: readonly CardEditionFace[];
+  readonly front: CardEditionFace;
+  /** 片面のカードのエディションは null。 */
+  readonly back: CardEditionFace | null;
 };
-
-export function frontEditionFace<F extends Pick<CardEditionFace, "side">>(edition: {
-  readonly faces: readonly F[];
-}): F {
-  const face = edition.faces.find((f) => f.side === "front");
-  if (!face) throw new Error("表の面がないエディションの状態は作れない");
-  return face;
-}

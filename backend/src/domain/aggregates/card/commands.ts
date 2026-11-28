@@ -4,7 +4,7 @@ import type { FaceSide } from "../../value-objects/face-side.js";
 import type { ImageId } from "../../value-objects/image-id.js";
 
 // スナップショットは検証前の値を持つ。業務の規則は集約が value object を作るときに確かめ、
-// 合わなければ例外ではなく CardSyncRejected を返す。
+// 合わなければ例外ではなく rejected を返す。
 // 取得元の応答の形（型・必須項目）は infrastructure が zod で確かめてから、この形に直す。
 
 export type CardFaceSnapshot = {
