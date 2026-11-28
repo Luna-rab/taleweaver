@@ -11,12 +11,12 @@
 
 infrastructure / application / domain / presentation の 4 層に分ける。domain はほかの層に依存しない。
 
-| 層             | 置くもの                                                                                                    |
-| -------------- | ----------------------------------------------------------------------------------------------------------- |
-| domain         | `value-objects/`・`aggregates/`・`ports/`（repository などの interface）・`services/`（集約に属さない処理） |
-| application    | 同期ジョブなど、集約を動かして保存する手順                                                                  |
-| infrastructure | 取得元の API クライアント、DB の repository（`ports/` の実装）                                              |
-| presentation   | hono の API                                                                                                 |
+| 層             | 置くもの                                                                                                                                              |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| domain         | `value-objects/`・`aggregates/`・`ports/`（repository などの interface）・`services/`（集約に属さない処理）                                           |
+| application    | 同期ジョブなど、集約を動かして保存する手順・`ports/`（unit of work など application が使う interface）・`policies/`（どのイベントでどの仕事を積むか） |
+| infrastructure | 取得元の API クライアント、DB の repository と unit of work（domain と application の `ports/` の実装）                                               |
+| presentation   | hono の API、CLI（`cli/`）                                                                                                                            |
 
 相対パスの import には `.js` を付ける（`module: NodeNext`）。
 

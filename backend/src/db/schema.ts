@@ -1,8 +1,11 @@
 // Grand Archive のカードデータベース。取得元は https://api.gatcg.com 。
 //
-// 主キーは DB が振り、API の id は source_id に分ける。API が id を振り直しても、カードを参照する
+// 主キーはこちらで振り、API の id は source_id に分ける。API が id を振り直しても、カードを参照する
 // 利用者のデータ（デッキなど）が壊れないようにするため。API の行とこちらの行も 1 対 1 ではない。
+// 集約のルートとエディションの主キーは、イベントに載せるためアプリケーションが保存の前に UUID v7 で決める。
 // source_id は大文字小文字だけが違う値が実在するので、小文字にそろえない。
+//
+// 集約のルートの version は楽観ロックの版番号。保存のたびに 1 上げ、読んだときの版と合わなければ保存しない。
 //
 // 列の値の規則（カード種別ごとにどの数値を持つかなど）は CHECK 制約にせず、取り込みで確かめる。
 // 書き込むのは取り込みだけで、規則を SQL と TypeScript の 2 か所に書くとずれるため。
@@ -34,9 +37,15 @@ const id = () =>
 
 const faceSide = (name: string) => text(name, { enum: ["front", "back"] });
 
+const version = () => integer("version").notNull().default(0);
+
+// 取得元から消えた時刻。NULL は取得元にある。行は消さずに残す。
+const withdrawnAt = () => timestamp("withdrawn_at", { withTimezone: true });
+
 /** カードを収録した商品（ブースター、スターターデッキ、プロモなど）。 */
 export const cardSets = pgTable("card_sets", {
   id: id(),
+  version: version(),
   sourceId: text("source_id").notNull().unique(),
   prefix: text("prefix").notNull().unique(),
   name: text("name").notNull(),
@@ -52,8 +61,10 @@ export const cardSets = pgTable("card_sets", {
  */
 export const cards = pgTable("cards", {
   id: id(),
-  legality: jsonb("legality").$type<Record<string, { limit: number }>>(),
-  syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+  version: version(),
+  // フォーマットごとの枚数の上限（0 は禁止）。載っていないフォーマットは制限なし。
+  legality: jsonb("legality").$type<Record<string, number>>(),
+  withdrawnAt: withdrawnAt(),
 });
 
 /** カードの面。名前・種別・コスト・効果を持つ。片面のカードは表の面だけを持つ。 */
@@ -121,21 +132,23 @@ export const cardRulings = pgTable(
   (t) => [primaryKey({ columns: [t.cardId, t.position] })],
 );
 
-/** あるカードが生成・参照する別のカード（召喚するトークンなど）。 */
+/**
+ * あるカードが生成・参照する別のカード（召喚するトークンなど）。
+ * 参照先はカードの id に解決せず、取得元の slug のまま持つ。行き先のない参照が取得元に実在し、
+ * 未発売のカードを指す参照はそのカードを取り込めば何もしなくてもつながるため。読む側が card_faces.slug で引く。
+ */
 export const cardReferences = pgTable(
   "card_references",
   {
     fromCardId: uuid("from_card_id")
       .notNull()
       .references(() => cards.id, { onDelete: "cascade" }),
-    toCardId: uuid("to_card_id")
-      .notNull()
-      .references(() => cards.id, { onDelete: "cascade" }),
+    toSlug: text("to_slug").notNull(),
     kind: text("kind").notNull(),
   },
   (t) => [
-    primaryKey({ columns: [t.fromCardId, t.toCardId, t.kind] }),
-    index("card_references_to_card_id_idx").on(t.toCardId),
+    primaryKey({ columns: [t.fromCardId, t.toSlug, t.kind] }),
+    index("card_references_to_slug_idx").on(t.toSlug),
   ],
 );
 
@@ -158,7 +171,9 @@ export const cardEditions = pgTable(
     collectorNumber: text("collector_number").notNull(),
     // 1=C 2=U 3=R 4=SR 5=UR 6=PR 7=CSR 8=CUR 9=CPR
     rarity: smallint("rarity").notNull(),
+    // 取り下げたエディションは既定にしない。
     isDefault: boolean("is_default").notNull(),
+    withdrawnAt: withdrawnAt(),
   },
   (t) => [
     index("card_editions_card_id_idx").on(t.cardId),
@@ -205,14 +220,56 @@ export const cardEditionFaces = pgTable(
  */
 export const images = pgTable("images", {
   id: id(),
+  version: version(),
   storageKey: text("storage_key").notNull().unique(),
   contentType: text("content_type").notNull(),
   width: integer("width").notNull(),
   height: integer("height").notNull(),
   byteSize: integer("byte_size").notNull(),
-  sourceUrl: text("source_url"),
-  // 参照する側ではなくここに置く。参照する側に置くと、画像を消しても ETag が残り、
-  // API が 304 を返し続けて取り直せなくなる。
+  // 取得元の場所は持たない。場所は取得元がカードについて返す事実なので、card_edition_faces.image_source_path だけが持つ。
+  // ETag は保存したファイルについての事実なので、参照する側ではなくここに置く。参照する側に置くと、
+  // 画像を消しても ETag が残り、API が 304 を返し続けて取り直せなくなる。
+  // NULL は取得元が ETag を返さなかった。
   sourceEtag: text("source_etag"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * 集約が出したイベント。payload は集約が出したイベントそのもので、日時は ISO 8601 の文字列になる。
+ * 集約の状態と同じトランザクションで書くので、状態だけが変わってイベントが失われることはない。
+ */
+export const domainEvents = pgTable("domain_events", {
+  // アプリケーションが UUID v7 で振る。
+  id: uuid("id").primaryKey(),
+  aggregateType: text("aggregate_type", { enum: ["card", "card_set", "image"] }).notNull(),
+  aggregateId: uuid("aggregate_id").notNull(),
+  type: text("type").notNull(),
+  payload: jsonb("payload").notNull(),
+  occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+});
+
+/**
+ * イベントを受けて動く処理（ポリシー）の、まだ終わっていない仕事。イベントと同じトランザクションで積む。
+ * イベントから積んだ仕事の payload は { eventId } だけにし、イベントの写しを持たない。中身は domain_events から読む。
+ */
+export const policyJobs = pgTable(
+  "policy_jobs",
+  {
+    // アプリケーションが UUID v7 で振る。
+    id: uuid("id").primaryKey(),
+    kind: text("kind").notNull(),
+    payload: jsonb("payload").notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    // この時刻を過ぎてから拾う。
+    runAfter: timestamp("run_after", { withTimezone: true }).notNull().defaultNow(),
+    lastError: text("last_error"),
+    // NULL でなければ再試行をあきらめた。拾わない。
+    failedAt: timestamp("failed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("policy_jobs_run_after_idx")
+      .on(t.runAfter)
+      .where(sql`${t.failedAt} IS NULL`),
+  ],
+);

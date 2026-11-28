@@ -10,13 +10,15 @@
     "start": "node dist/index.js",
     "db:generate": "drizzle-kit generate --config src/db/drizzle.config.ts",
     "db:migrate": "drizzle-kit migrate --config src/db/drizzle.config.ts",
-    "db:check": "drizzle-kit check --config src/db/drizzle.config.ts"
+    "db:check": "drizzle-kit check --config src/db/drizzle.config.ts",
+    "sync:catalog": "tsx --env-file-if-exists=.env.development src/presentation/cli/sync-catalog.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.3",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.16",
-    "pg": "^8.23.1"
+    "pg": "^8.23.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
