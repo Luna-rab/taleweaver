@@ -8,6 +8,13 @@
       "when": 1795844786845,
       "tag": "0000_init_cards",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1795882285868,
+      "tag": "0001_sync_catalog",
+      "breakpoints": true
     }
   ]
 }
