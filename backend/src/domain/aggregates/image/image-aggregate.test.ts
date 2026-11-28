@@ -11,8 +11,6 @@ import type { ImageEvent } from "./events.js";
 import { ImageAggregate } from "./image-aggregate.js";
 import type { ImageOperations } from "./operations.js";
 
-const SOURCE_URL = "https://api.gatcg.com/cards/images/Wa5g8PP0Q1.jpg";
-
 function fetched(overrides: Partial<FetchedSourceImage> = {}): FetchedSourceImage {
   return {
     kind: "fetched",
@@ -41,9 +39,8 @@ function store() {
     }
     return { image, decision };
   };
-  const register = () =>
-    run({ type: "RegisterSourceImage", sourceUrl: SOURCE_URL, fetched: fetched() });
-  return { run, register };
+  const register = () => run({ type: "RegisterSourceImage", fetched: fetched() });
+  return { images, run, register };
 }
 
 /** accepted の events を返す。rejected なら reason を載せて失敗させる。 */
@@ -60,9 +57,10 @@ describe("RegisterSourceImage", () => {
     const { image, decision } = await register();
     expect(types(decision)).toEqual(["ImageRegistered"]);
     expect(image.state).toMatchObject({
+      version: 0,
       contentType: "image/jpeg",
       dimensions: { width: 500, height: 700 },
-      source: { url: SOURCE_URL, etag: '"etag-1"' },
+      source: { etag: '"etag-1"' },
     });
     expect(image.state).not.toHaveProperty("etag");
   });
@@ -73,11 +71,7 @@ describe("RegisterSourceImage", () => {
       [{ kind: "notFound" as const }, "取得元に画像がない"],
       [fetched({ contentType: "text/html" }), "画像ではない: text/html"],
     ] as const) {
-      const { image, decision } = await run({
-        type: "RegisterSourceImage",
-        sourceUrl: SOURCE_URL,
-        fetched: result,
-      });
+      const { image, decision } = await run({ type: "RegisterSourceImage", fetched: result });
       expect(decision).toEqual({ kind: "rejected", reason });
       expect(image.state).toBeNull();
     }
@@ -85,14 +79,14 @@ describe("RegisterSourceImage", () => {
 });
 
 describe("RefreshSourceImage", () => {
-  it("304 ならイベントなし、取得し直せば新しいキーで ImageReplaced を出す", async () => {
-    const { run, register } = store();
+  it("304 ならイベントなし、取得し直せば新しいキーで ImageReplaced を出し、版は読んだときのまま", async () => {
+    const { images, run, register } = store();
     const registered = (await register()).image.state!;
+    images.set(registered.id, { ...registered, version: 3 });
 
     const unchanged = await run({
       type: "RefreshSourceImage",
       imageId: registered.id,
-      sourceUrl: SOURCE_URL,
       fetched: { kind: "notModified" },
     });
     expect(unchanged.decision).toEqual({ kind: "accepted", events: [] });
@@ -100,13 +94,12 @@ describe("RefreshSourceImage", () => {
     const replaced = await run({
       type: "RefreshSourceImage",
       imageId: registered.id,
-      sourceUrl: SOURCE_URL,
       fetched: fetched({ etag: '"etag-2"' }),
     });
     expect(eventsOf(replaced.decision)).toMatchObject([
       { type: "ImageReplaced", previousStorageKey: registered.storageKey },
     ]);
-    expect(replaced.image.state?.id).toBe(registered.id);
+    expect(replaced.image.state).toMatchObject({ id: registered.id, version: 3 });
     expect(replaced.image.state?.storageKey).not.toBe(registered.storageKey);
   });
 
@@ -116,23 +109,9 @@ describe("RefreshSourceImage", () => {
     const { image, decision } = await run({
       type: "RefreshSourceImage",
       imageId: registered.id,
-      sourceUrl: SOURCE_URL,
       fetched: { kind: "notFound" },
     });
     expect(decision).toEqual({ kind: "rejected", reason: "取得元に画像がない" });
     expect(image.state).toEqual(registered);
-  });
-
-  it("SOURCE_URL が変わったのに 304 を送ると、拒否ではなく例外を投げる", async () => {
-    const { run, register } = store();
-    const registered = (await register()).image.state!;
-    await expect(
-      run({
-        type: "RefreshSourceImage",
-        imageId: registered.id,
-        sourceUrl: `${SOURCE_URL}?moved`,
-        fetched: { kind: "notModified" },
-      }),
-    ).rejects.toThrow("前の ETag");
   });
 });

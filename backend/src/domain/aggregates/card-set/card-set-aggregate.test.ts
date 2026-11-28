@@ -52,10 +52,14 @@ const types = (decision: Decision<CardSetEvent>) => eventsOf(decision).map((e) =
 
 describe("SyncCardSet", () => {
   it("新しいセットは CardSetRegistered、同じ内容はイベントなし、変われば CardSetRevised を出す", async () => {
-    const { sync } = store();
-    expect(types((await sync(snapshot())).decision)).toEqual(["CardSetRegistered"]);
+    const { sets, sync } = store();
+    const registered = await sync(snapshot());
+    expect(types(registered.decision)).toEqual(["CardSetRegistered"]);
+    expect(registered.cardSet.state?.version).toBe(0);
+    sets.set(registered.cardSet.state!.id, { ...registered.cardSet.state!, version: 3 });
     expect((await sync(snapshot())).decision).toEqual({ kind: "accepted", events: [] });
-    const { decision } = await sync(snapshot({ releaseDate: "2024-02-01" }));
+    const { cardSet, decision } = await sync(snapshot({ releaseDate: "2024-02-01" }));
+    expect(cardSet.state?.version).toBe(3);
     expect(eventsOf(decision)).toMatchObject([
       {
         type: "CardSetRevised",

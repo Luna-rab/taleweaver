@@ -4,22 +4,21 @@ import type { CardId } from "../../value-objects/card-id.js";
 import type { CardReference } from "../../value-objects/card-reference.js";
 import type { FaceSide } from "../../value-objects/face-side.js";
 import type { ImageId } from "../../value-objects/image-id.js";
-import type { ImageSourcePath } from "../../value-objects/image-source-path.js";
 import type { Ruling } from "../../value-objects/ruling.js";
-import type { SourceId } from "../../value-objects/source-id.js";
 import type { CardEdition } from "./entities/card-edition.js";
 import type { CardFace } from "./entities/card-face.js";
-import type { Card } from "./entities/card.js";
 
 // イベントは状態を変えた事実だけを表す。
 // 状態の変化はどれも、いずれかのイベントで表す（購読する処理がまだないイベントもある）。
 // 1 回のコマンドで、変わった部分ごとに複数のイベントが出ることがある。
 
-/** 新しいカードを取り込んだ。登録したカードの全エディションの画像を取得する起点にもなる。 */
+/**
+ * 新しいカードを取り込んだ。登録したカードの全エディションの画像を取得する起点にもなる。
+ * 中身は載せないので、読む側は cardId で今のカードを読む。
+ */
 export type CardRegistered = {
   readonly type: "CardRegistered";
   readonly cardId: CardId;
-  readonly card: Card;
 };
 
 /** 面のルールに関わる特性が変わった。 */
@@ -40,7 +39,7 @@ export type CardFaceRevised = {
   readonly after: CardFace;
 };
 
-/** 新しい裁定が出た。登録のときは出さない（CardRegistered が全件を持つ）。 */
+/** 新しい裁定が出た。登録のときは出さない（CardRegistered だけを出す）。 */
 export type CardRulingAdded = {
   readonly type: "CardRulingAdded";
   readonly cardId: CardId;
@@ -83,16 +82,11 @@ export type LegalityChange = {
   readonly after: number | null;
 };
 
-/** エディションが増えた。画像を初めて取得する起点。 */
+/** エディションが増えた。画像を初めて取得する起点。面と画像のパスは、読む側が今のカードから読む。 */
 export type CardEditionAdded = {
   readonly type: "CardEditionAdded";
   readonly cardId: CardId;
   readonly editionId: CardEditionId;
-  readonly faces: readonly {
-    readonly side: FaceSide;
-    readonly sourceId: SourceId;
-    readonly imageSourcePath: ImageSourcePath;
-  }[];
 };
 
 /**

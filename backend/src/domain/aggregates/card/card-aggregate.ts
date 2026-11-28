@@ -85,6 +85,7 @@ export class CardAggregate {
     const editions = await this.#mergeEditions(parsed.editions, existing, command.syncedAt);
     const next = normalize({
       id: existing?.id ?? this.#ops.newCardId(),
+      version: existing?.version ?? 0,
       front: parsed.front,
       back: parsed.back,
       legality: parsed.legality,
@@ -96,7 +97,7 @@ export class CardAggregate {
 
     if (existing === null) {
       this.#state = next;
-      return [{ type: "CardRegistered", cardId: next.id, card: next }];
+      return [{ type: "CardRegistered", cardId: next.id }];
     }
     if (isDeepStrictEqual(next, existing)) {
       this.#state = existing;
@@ -318,11 +319,6 @@ function editionEvents(
         type: "CardEditionAdded",
         cardId,
         editionId: merged.id,
-        faces: facesWithSide(merged).map(({ side, face }) => ({
-          side,
-          sourceId: face.sourceId,
-          imageSourcePath: face.imageSourcePath,
-        })),
       },
     ];
   }
