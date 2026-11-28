@@ -16,13 +16,14 @@ import { Slug } from "../../value-objects/slug.js";
 import { SourceId } from "../../value-objects/source-id.js";
 import { ensure, RuleViolation } from "../../value-objects/utils/rule-violation.js";
 import type {
+  AttachEditionImage,
   CardCommand,
   CardEditionSnapshot,
   CardSnapshot,
   SyncCard,
   WithdrawCard,
 } from "./commands.js";
-import { parseCardEditionFace } from "./entities/card-edition-face.js";
+import { type ParsedCardEditionFace, parseCardEditionFace } from "./entities/card-edition-face.js";
 import { type CardEdition, frontEditionFace } from "./entities/card-edition.js";
 import { type CardFace, parseCardFace } from "./entities/card-face.js";
 import { type Card, frontFace } from "./entities/card.js";
@@ -59,6 +60,8 @@ export class CardAggregate {
         return await this.#syncOrReject(command);
       case "WithdrawCard":
         return await this.#withdraw(command);
+      case "AttachEditionImage":
+        return await this.#attachImage(command);
     }
   }
 
@@ -141,19 +144,66 @@ export class CardAggregate {
    * 取り下げるカードは selectCardsToWithdraw が保存済みのものから選ぶので、見つからないのは手順の誤りとして例外にする。
    */
   async #withdraw(command: WithdrawCard): Promise<readonly CardEvent[]> {
-    if (this.#state !== null && this.#state.id !== command.cardId) {
-      throw new Error(
-        `カード ${this.#state.id} を扱うインスタンスに、別のカード ${command.cardId} の取り下げが送られた`,
-      );
-    }
-    const found = this.#state ?? (await this.#ops.findById(command.cardId));
-    if (found === null) throw new Error(`取り下げるカードがない: ${command.cardId}`);
-    const existing = normalize(found);
+    const existing = await this.#load(command.cardId);
     this.#state = existing;
     if (existing.withdrawnAt !== null) return [{ type: "CardUnchanged", cardId: existing.id }];
 
     this.#state = { ...existing, withdrawnAt: command.withdrawnAt };
     return [{ type: "CardWithdrawn", cardId: existing.id }];
+  }
+
+  /**
+   * エディションの面に画像を結び付ける。同じ画像を結び付けていれば CardUnchanged を返す。
+   * 送る側は保存済みのカードから画像のない面を選ぶので、カード・エディション・面が無いか、
+   * 面に別の画像が既にあるのは手順の誤りとして例外にする。
+   */
+  async #attachImage(command: AttachEditionImage): Promise<readonly CardEvent[]> {
+    const existing = await this.#load(command.cardId);
+    this.#state = existing;
+    const edition = existing.editions.find((e) => e.id === command.editionId);
+    const face = edition?.faces.find((f) => f.side === command.side);
+    if (edition === undefined || face === undefined) {
+      throw new Error(
+        `カード ${existing.id} にエディション ${command.editionId} の ${command.side} の面がない`,
+      );
+    }
+    if (face.imageId === command.imageId) return [{ type: "CardUnchanged", cardId: existing.id }];
+    // 絵や取得元の URL が変わっても、同じ画像を差し替えるので結び付け直さない。別の画像が来るのは
+    // application の誤りで、受け付けると前の画像がどこからも参照されずに残る。
+    if (face.imageId !== null) {
+      throw new Error(
+        `エディション ${edition.id} の ${face.side} の面には、既に画像 ${face.imageId} を結び付けている`,
+      );
+    }
+
+    const attached = { ...face, imageId: command.imageId };
+    this.#state = {
+      ...existing,
+      editions: existing.editions.map((e) =>
+        e === edition ? { ...e, faces: e.faces.map((f) => (f === face ? attached : f)) } : e,
+      ),
+    };
+    return [
+      {
+        type: "CardEditionImageAttached",
+        cardId: existing.id,
+        editionId: edition.id,
+        side: face.side,
+        imageId: command.imageId,
+      },
+    ];
+  }
+
+  /** id を指定したコマンドの対象を読む。別のカードを扱うインスタンスに送られたら、application の誤りとして例外にする。 */
+  async #load(cardId: CardId): Promise<Card> {
+    if (this.#state !== null && this.#state.id !== cardId) {
+      throw new Error(
+        `カード ${this.#state.id} を扱うインスタンスに、別のカード ${cardId} のコマンドが送られた`,
+      );
+    }
+    const found = this.#state ?? (await this.#ops.findById(cardId));
+    if (found === null) throw new Error(`カードがない: ${cardId}`);
+    return normalize(found);
   }
 
   /**
@@ -230,7 +280,11 @@ export class CardAggregate {
       rarity: edition.rarity,
       isDefault: edition.isDefault,
       withdrawnAt: null,
-      faces: edition.faces,
+      // 画像は取得元のスナップショットに無いので、同じ側の既存の面から引き継ぐ。
+      faces: edition.faces.map((f) => ({
+        ...f,
+        imageId: match?.faces.find((m) => m.side === f.side)?.imageId ?? null,
+      })),
     };
     return { edition: merged, events: cardId === null ? [] : editionEvents(cardId, match, merged) };
   }
@@ -426,8 +480,9 @@ function sameReference(x: CardReference, y: CardReference): boolean {
   return x.kind === y.kind && x.targetSlug === y.targetSlug;
 }
 
-type ParsedEdition = Omit<CardEdition, "id" | "setId" | "withdrawnAt"> & {
+type ParsedEdition = Omit<CardEdition, "id" | "setId" | "withdrawnAt" | "faces"> & {
   readonly setSourceId: SourceId;
+  readonly faces: readonly ParsedCardEditionFace[];
 };
 
 type Matched = {

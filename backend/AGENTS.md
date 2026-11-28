@@ -4,6 +4,8 @@
 
 - [取得元（api.gatcg.com）のデータ](docs/gatcg-source.md)
 - [Card 集約の設計](docs/card-aggregate.md)
+- [CardSet 集約の設計](docs/card-set-aggregate.md)
+- [Image 集約の設計](docs/image-aggregate.md)
 
 ## 層
 

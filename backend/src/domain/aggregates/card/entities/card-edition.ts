@@ -21,9 +21,9 @@ export type CardEdition = {
   readonly faces: readonly CardEditionFace[];
 };
 
-export function frontEditionFace(edition: {
-  readonly faces: readonly CardEditionFace[];
-}): CardEditionFace {
+export function frontEditionFace<F extends Pick<CardEditionFace, "side">>(edition: {
+  readonly faces: readonly F[];
+}): F {
   const face = edition.faces.find((f) => f.side === "front");
   if (!face) throw new Error("表の面がないエディションの状態は作れない");
   return face;

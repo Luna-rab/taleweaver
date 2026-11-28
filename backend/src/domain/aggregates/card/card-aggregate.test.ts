@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { CardEditionId } from "../../value-objects/card-edition-id.js";
 import { CardId } from "../../value-objects/card-id.js";
 import { CardSetId } from "../../value-objects/card-set-id.js";
+import { FaceSide } from "../../value-objects/face-side.js";
+import { ImageId } from "../../value-objects/image-id.js";
 import { CardAggregate } from "./card-aggregate.js";
 import type {
   CardCommand,
@@ -380,6 +382,55 @@ describe("WithdrawCard", () => {
     const { run } = store();
     await expect(
       run({ type: "WithdrawCard", cardId: CardId(randomUUID()), withdrawnAt: SYNCED_AT }),
-    ).rejects.toThrow("取り下げるカードがない");
+    ).rejects.toThrow("カードがない");
+  });
+});
+
+describe("AttachEditionImage", () => {
+  it("画像を結び付けると CardEditionImageAttached を出し、同期しても画像を引き継ぐ", async () => {
+    const { run, sync } = store();
+    const registered = await sync(snapshot());
+    const card = registered.card.state!;
+    const editionId = card.editions[0]!.id;
+    const imageId = ImageId(randomUUID());
+    const attach = () =>
+      run({
+        type: "AttachEditionImage",
+        cardId: card.id,
+        editionId,
+        side: FaceSide("front"),
+        imageId,
+      });
+
+    const attached = await attach();
+    expect(attached.events).toMatchObject([{ type: "CardEditionImageAttached", imageId }]);
+    expect(types((await attach()).events)).toEqual(["CardUnchanged"]);
+    await expect(
+      run({
+        type: "AttachEditionImage",
+        cardId: card.id,
+        editionId,
+        side: FaceSide("front"),
+        imageId: ImageId(randomUUID()),
+      }),
+    ).rejects.toThrow("既に画像");
+
+    const resynced = await sync(snapshot());
+    expect(types(resynced.events)).toEqual(["CardUnchanged"]);
+    expect(resynced.card.state?.editions[0]?.faces[0]?.imageId).toBe(imageId);
+  });
+
+  it("カードにない面に結び付けようとすると、拒否ではなく例外を投げる", async () => {
+    const { run, sync } = store();
+    const card = (await sync(snapshot())).card.state!;
+    await expect(
+      run({
+        type: "AttachEditionImage",
+        cardId: card.id,
+        editionId: card.editions[0]!.id,
+        side: FaceSide("back"),
+        imageId: ImageId(randomUUID()),
+      }),
+    ).rejects.toThrow("面がない");
   });
 });
