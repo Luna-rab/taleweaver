@@ -12,7 +12,6 @@ export interface CardRepository {
   /**
    * カードを upsert する。面とエディションの面は (親の id, side)、エディションは id を鍵に書き換え、
    * card にない裁定・参照・面の行は消す。エディションは取り下げても card に残るので消えない。
-   * エディションの面の image_id は Image 側が書くので、更新する列に含めない。
    */
   save(card: Card): Promise<void>;
 }

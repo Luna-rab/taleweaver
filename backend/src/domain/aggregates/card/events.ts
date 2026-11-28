@@ -3,6 +3,7 @@ import type { CardEditionId } from "../../value-objects/card-edition-id.js";
 import type { CardId } from "../../value-objects/card-id.js";
 import type { CardReference } from "../../value-objects/card-reference.js";
 import type { FaceSide } from "../../value-objects/face-side.js";
+import type { ImageId } from "../../value-objects/image-id.js";
 import type { ImageSourcePath } from "../../value-objects/image-source-path.js";
 import type { Ruling } from "../../value-objects/ruling.js";
 import type { SourceId } from "../../value-objects/source-id.js";
@@ -115,7 +116,7 @@ export type CardEditionRevised = {
   readonly after: CardEdition;
 };
 
-/** エディションが取得元から消えた。行は残し、既定から外す。画像を消すかは Image 側が決める。 */
+/** エディションが取得元から消えた。行は残し、既定から外す。画像も残す。 */
 export type CardEditionWithdrawn = {
   readonly type: "CardEditionWithdrawn";
   readonly cardId: CardId;
@@ -127,6 +128,15 @@ export type CardEditionReinstated = {
   readonly type: "CardEditionReinstated";
   readonly cardId: CardId;
   readonly editionId: CardEditionId;
+};
+
+/** エディションの面に画像を結び付けた。 */
+export type CardEditionImageAttached = {
+  readonly type: "CardEditionImageAttached";
+  readonly cardId: CardId;
+  readonly editionId: CardEditionId;
+  readonly side: FaceSide;
+  readonly imageId: ImageId;
 };
 
 export type CardWithdrawn = {
@@ -155,6 +165,7 @@ export type CardEvent =
   | CardEditionRevised
   | CardEditionWithdrawn
   | CardEditionReinstated
+  | CardEditionImageAttached
   | CardWithdrawn
   | CardReinstated;
 

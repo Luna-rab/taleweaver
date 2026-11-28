@@ -1,4 +1,7 @@
+import type { CardEditionId } from "../../value-objects/card-edition-id.js";
 import type { CardId } from "../../value-objects/card-id.js";
+import type { FaceSide } from "../../value-objects/face-side.js";
+import type { ImageId } from "../../value-objects/image-id.js";
 
 // スナップショットは検証前の値を持つ。業務の規則は集約が value object を作るときに確かめ、
 // 合わなければ例外ではなく CardSyncRejected を返す。
@@ -78,4 +81,13 @@ export type WithdrawCard = {
   readonly withdrawnAt: Date;
 };
 
-export type CardCommand = SyncCard | WithdrawCard;
+/** 取得して保存した画像を、エディションの面に結び付ける。画像を差し替えたときも同じ画像の id のままなので、送るのは新しい画像のときだけ。 */
+export type AttachEditionImage = {
+  readonly type: "AttachEditionImage";
+  readonly cardId: CardId;
+  readonly editionId: CardEditionId;
+  readonly side: FaceSide;
+  readonly imageId: ImageId;
+};
+
+export type CardCommand = SyncCard | WithdrawCard | AttachEditionImage;
