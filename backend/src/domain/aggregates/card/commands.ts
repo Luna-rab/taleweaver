@@ -5,7 +5,6 @@ import type { CardId } from "../../value-objects/card-id.js";
 // 取得元の応答の形（型・必須項目）は infrastructure が zod で確かめてから、この形に直す。
 
 export type CardFaceSnapshot = {
-  readonly side: "front" | "back";
   readonly sourceId: string;
   readonly slug: string;
   readonly name: string;
@@ -27,7 +26,6 @@ export type CardFaceSnapshot = {
 };
 
 export type CardEditionFaceSnapshot = {
-  readonly side: "front" | "back";
   readonly sourceId: string;
   readonly slug: string;
   readonly illustrator: string | null;
@@ -43,11 +41,15 @@ export type CardEditionSnapshot = {
   readonly collectorNumber: string;
   readonly rarity: number;
   readonly isDefault: boolean;
-  readonly faces: readonly CardEditionFaceSnapshot[];
+  readonly front: CardEditionFaceSnapshot;
+  readonly back: CardEditionFaceSnapshot | null;
 };
 
+// 面は配列ではなく表と裏で持ち、表のないカードや同じ側が 2 つあるカードを型の上で作れないようにする。
 export type CardSnapshot = {
-  readonly faces: readonly CardFaceSnapshot[];
+  readonly front: CardFaceSnapshot;
+  /** 片面のカードは null。 */
+  readonly back: CardFaceSnapshot | null;
   readonly legality: Readonly<Record<string, number>>;
   readonly rulings: readonly {
     readonly title: string | null;

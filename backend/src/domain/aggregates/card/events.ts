@@ -35,17 +35,17 @@ export type CardUnchanged = {
 export type CardSyncRejected = {
   readonly type: "CardSyncRejected";
   readonly cardId: CardId | null;
-  readonly frontSourceId: string | null;
+  readonly frontSourceId: string;
   readonly reason: string;
 };
 
-/** 面のルールに関わる特性が変わった。面が増えた・減ったときは before か after が null。 */
+/** 面のルールに関わる特性が変わった。 */
 export type CardCharacteristicsChanged = {
   readonly type: "CardCharacteristicsChanged";
   readonly cardId: CardId;
   readonly side: FaceSide;
-  readonly before: CardCharacteristics | null;
-  readonly after: CardCharacteristics | null;
+  readonly before: CardCharacteristics;
+  readonly after: CardCharacteristics;
 };
 
 /** 面のルールに関わらない値（sourceId・slug・effectRaw・取得元の更新日時）が変わった。 */
@@ -72,7 +72,7 @@ export type CardRulingRemoved = {
   readonly ruling: Ruling;
 };
 
-/** 裁定の増減はなく、並び順だけが変わった。 */
+/** 前後の両方にある裁定の並び順が変わった。裁定の増減と同時に出ることもある。 */
 export type CardRulingsReordered = {
   readonly type: "CardRulingsReordered";
   readonly cardId: CardId;

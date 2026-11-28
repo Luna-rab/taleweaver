@@ -9,7 +9,6 @@ export type Legality = Brand<Readonly<Record<string, number>>, "Legality">;
 
 export const Legality = createBrand<Legality>((v) => {
   for (const [format, limit] of Object.entries(v)) {
-    ensure(format.length > 0, "フォーマット名が空");
     ensure(
       Number.isInteger(limit) && limit >= 0,
       `${format} の上限が 0 以上の整数ではない: ${limit}`,

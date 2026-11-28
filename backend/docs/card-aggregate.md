@@ -16,6 +16,7 @@ Card 集約のエンティティは `aggregates/card/entities/` に置く。ル�
 
 - エディションの面の組（表だけ／表と裏）が、カードの面の組とそろう
 - 既定のエディションは多くても 1 つ（既定のないカードが取得元に実在する）
+- カードの面の組は、登録した後に変わらない（両面カードが片面になることも、片面カードに裏面が付くこともない）。変わったスナップショットは `CardSyncRejected` にする。取り下げて残すエディションの面の組も、これでカードの面の組とそろい続ける
 
 ## 集約の動かし方
 
@@ -29,7 +30,11 @@ sequenceDiagram
   participant Repo as CardRepository
   Job->>Card: new CardAggregate(ops)
   Job->>Card: execute(SyncCard)
-  Card->>Ops: findByFrontSourceId（無ければ findByFrontSlug）
+  alt 最初のコマンド（state が null）
+    Card->>Ops: findByFrontSourceId（無ければ findByFrontSlug）
+  else 2 回目以降
+    Card->>Card: state と照合する（別のカードなら例外）
+  end
   Card->>Ops: findSetIdBySourceId
   Card-->>Job: イベントの配列（1 件以上）
   Job->>Repo: changesState に当たるイベントがあれば save(card.state)
@@ -37,7 +42,9 @@ sequenceDiagram
 ```
 
 - `execute` は何が起きたかを必ずイベントで返す。変更がなかったこと（`CardUnchanged`）と拒否したこと（`CardSyncRejected`）もイベントにする。この 2 つ以外のイベントは状態を変えたことを表し、application は保存する。
-- `state` は最後に処理したコマンドの結果なので、application は `execute` のたびに保存する。保存するかどうかはイベントで決まるので、集約は読み込んだときの状態を持たない。repository はカードを upsert し、カードにない裁定・参照・面の行を消す。エディションの面の `image_id` は Image 側が書くので、更新する列に含めない。
+- 1 つの `CardAggregate` は 1 枚のカードだけを扱う。`SyncCard` はカードの id を持たないので、どのカードかは最初のコマンドの照合で決まる。決まった後のコマンドは DB ではなく `state` と照合し、別のカードに当たれば例外を投げる（application の使い方の誤り）。DB と照合すると、まだ保存していない登録や改訂を見落とすため。
+- インスタンスは 1 回の同期の間より長く持たない。2 回目以降は DB を読み直さず、保存にも版の確認（楽観ロック）がないので、定期ジョブと手動の同期が同時に動くと、片方が古い `state` から上書きしてしまう。
+- 保存するかどうかはイベントで決まるので、集約は読み込んだときの状態を持たない。repository はカードを upsert し、カードにない裁定・参照・面の行を消す。エディションの面の `image_id` は Image 側が書くので、更新する列に含めない。
 - 主キーは保存の前に `newCardId` で決める。イベントに id を載せるため。DB の既定値（`uuidv7()`）には頼らないので、`IdGenerator` の実装も UUID v7 を返す。
 - 「変更なし」の判定の前に、面・エディション・参照を決まった順に並べ直す。repository が返す順や取得元の順が変わっただけで保存しないため。裁定は並び順に意味があるので並べ替えない。
 
@@ -69,7 +76,7 @@ slug で見つかったものの元の sourceId が今回の取得にも残っ�
 | `CardFaceRevised`                                | 面のルールに関わらない値（sourceId・slug・effectRaw・取得元の更新日時）が変わった                                           |
 | `CardRulingAdded`                                | 新しい裁定が出た。題に ERRATA を含むものは `isErrata: true`                                                                 |
 | `CardRulingRemoved`                              | 裁定が取得元から消えた                                                                                                      |
-| `CardRulingsReordered`                           | 裁定の増減はなく、並びだけが変わった                                                                                        |
+| `CardRulingsReordered`                           | 前後の両方にある裁定の並び順が変わった。裁定の増減と同時に出ることもある                                                    |
 | `CardReferencesChanged`                          | 参照が増えた・消えた                                                                                                        |
 | `CardLegalityChanged`                            | 禁止・制限が変わった。変わったフォーマットだけを載せる                                                                      |
 | `CardEditionAdded`                               | エディションが増えた。画像を初めて取得する起点                                                                              |

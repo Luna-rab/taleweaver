@@ -1,5 +1,5 @@
 import { Collaborator } from "../../../value-objects/collaborator.js";
-import { FaceSide } from "../../../value-objects/face-side.js";
+import type { FaceSide } from "../../../value-objects/face-side.js";
 import { FlavorText } from "../../../value-objects/flavor-text.js";
 import { Illustrator } from "../../../value-objects/illustrator.js";
 import { ImageSourcePath } from "../../../value-objects/image-source-path.js";
@@ -24,9 +24,12 @@ export type CardEditionFace = {
 };
 
 /** 業務の規則に合わない値があれば RuleViolation を投げる。 */
-export function parseCardEditionFace(face: CardEditionFaceSnapshot): CardEditionFace {
+export function parseCardEditionFace(
+  face: CardEditionFaceSnapshot,
+  side: FaceSide,
+): CardEditionFace {
   return {
-    side: FaceSide(face.side),
+    side,
     sourceId: SourceId(face.sourceId),
     slug: Slug(face.slug),
     illustrator: face.illustrator === null ? null : Illustrator(face.illustrator),

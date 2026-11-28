@@ -6,7 +6,12 @@ import { CardEditionId } from "../../value-objects/card-edition-id.js";
 import { CardId } from "../../value-objects/card-id.js";
 import { CardSetId } from "../../value-objects/card-set-id.js";
 import { CardAggregate } from "./card-aggregate.js";
-import type { CardCommand, CardEditionSnapshot, CardSnapshot } from "./commands.js";
+import type {
+  CardCommand,
+  CardEditionFaceSnapshot,
+  CardEditionSnapshot,
+  CardSnapshot,
+} from "./commands.js";
 import { frontEditionFace } from "./entities/card-edition.js";
 import { type Card, frontFace } from "./entities/card.js";
 import { type CardEvent, changesState } from "./events.js";
@@ -24,45 +29,45 @@ function edition(
     collectorNumber: "001",
     rarity: 1,
     isDefault: false,
-    faces: [
-      {
-        side: "front",
-        sourceId,
-        slug: `${sourceId}-slug`,
-        illustrator: "someone",
-        collaborators: [],
-        flavor: null,
-        imageSourcePath: `/cards/images/${sourceId}.jpg`,
-        sourceUpdatedAt: new Date("2026-01-01T00:00:00Z"),
-      },
-    ],
+    front: editionFace(sourceId),
+    back: null,
     ...overrides,
+  };
+}
+
+function editionFace(sourceId: string): CardEditionFaceSnapshot {
+  return {
+    sourceId,
+    slug: `${sourceId}-slug`,
+    illustrator: "someone",
+    collaborators: [],
+    flavor: null,
+    imageSourcePath: `/cards/images/${sourceId}.jpg`,
+    sourceUpdatedAt: new Date("2026-01-01T00:00:00Z"),
   };
 }
 
 function snapshot(overrides: Partial<CardSnapshot> = {}): CardSnapshot {
   return {
-    faces: [
-      {
-        side: "front",
-        sourceId: "AbC123",
-        slug: "lorraine-blademaster",
-        name: "Lorraine, Blademaster",
-        elements: ["NORM"],
-        classes: ["WARRIOR"],
-        types: ["CHAMPION"],
-        subtypes: ["HUMAN"],
-        cost: { type: "memory", value: 2 },
-        level: 2,
-        life: 22,
-        power: null,
-        durability: null,
-        speed: null,
-        effect: "**On Enter**: draw a card.",
-        effectRaw: "On Enter: draw a card.",
-        sourceUpdatedAt: new Date("2026-01-01T00:00:00Z"),
-      },
-    ],
+    front: {
+      sourceId: "AbC123",
+      slug: "lorraine-blademaster",
+      name: "Lorraine, Blademaster",
+      elements: ["NORM"],
+      classes: ["WARRIOR"],
+      types: ["CHAMPION"],
+      subtypes: ["HUMAN"],
+      cost: { type: "memory", value: 2 },
+      level: 2,
+      life: 22,
+      power: null,
+      durability: null,
+      speed: null,
+      effect: "**On Enter**: draw a card.",
+      effectRaw: "On Enter: draw a card.",
+      sourceUpdatedAt: new Date("2026-01-01T00:00:00Z"),
+    },
+    back: null,
     legality: {},
     rulings: [{ title: null, addedOn: "2025-01-01", description: "A ruling." }],
     references: [{ kind: "SUMMON", targetSlug: "baby-slime" }],
@@ -71,11 +76,8 @@ function snapshot(overrides: Partial<CardSnapshot> = {}): CardSnapshot {
   };
 }
 
-function withFront(
-  base: CardSnapshot,
-  front: Partial<CardSnapshot["faces"][number]>,
-): CardSnapshot {
-  return { ...base, faces: [{ ...base.faces[0]!, ...front }] };
+function withFront(base: CardSnapshot, front: Partial<CardSnapshot["front"]>): CardSnapshot {
+  return { ...base, front: { ...base.front, ...front } };
 }
 
 /** メモリ上の repository。application と同じく、changesState に当たるイベントがあれば保存する。 */
@@ -235,6 +237,7 @@ describe("SyncCard", () => {
     const { cards, sync } = store(new Set(["AbC123"]));
     await sync(snapshot());
     const { events } = await sync(withFront(snapshot(), { sourceId: "NewId99" }));
+    // NewId99 は slug が重なった別のカードなので、見つけたカードの id は載せない。
     expect(events).toMatchObject([
       { type: "CardSyncRejected", cardId: null, frontSourceId: "NewId99" },
     ]);
@@ -270,7 +273,7 @@ describe("SyncCard", () => {
     }
   });
 
-  it("照合した後に拒否したときは、CardSyncRejected に cardId を載せ、state は保存済みのまま", async () => {
+  it("照合した後に拒否したときは、CardSyncRejected に cardId を載せ、state は変えない", async () => {
     const { sync } = store();
     const registered = await sync(snapshot());
     // ed-2 の slug は既存の ed-1 と同じで、ed-1 の sourceId も取得に残っている。
@@ -279,27 +282,23 @@ describe("SyncCard", () => {
       snapshot({
         editions: [
           edition("ed-1", { isDefault: true }),
-          { ...clash, faces: [{ ...clash.faces[0]!, slug: "ed-1-slug" }] },
+          { ...clash, front: { ...clash.front, slug: "ed-1-slug" } },
         ],
       }),
     );
     expect(events).toMatchObject([{ type: "CardSyncRejected", cardId: registered.card.state!.id }]);
-    expect(card.state).toEqual(registered.card.state);
+    // 新しいインスタンスなので、拒否の前の state は null。照合したカードに結び付かない。
+    expect(card.state).toBeNull();
   });
 
   it("両面カードを登録でき、裏面の特性が変わると side: back のイベントを出す", async () => {
     const { sync } = store();
     const base = snapshot();
-    const back = { ...base.faces[0]!, side: "back" as const, sourceId: "Back1", slug: "back-slug" };
+    const back = { ...base.front, sourceId: "Back1", slug: "back-slug" };
     const twoFaced = (power: number | null): CardSnapshot => ({
       ...base,
-      faces: [base.faces[0]!, { ...back, power }],
-      editions: [
-        {
-          ...edition("ed-1", { isDefault: true }),
-          faces: [edition("ed-1").faces[0]!, { ...edition("ed-1-back").faces[0]!, side: "back" }],
-        },
-      ],
+      back: { ...back, power },
+      editions: [edition("ed-1", { isDefault: true, back: editionFace("ed-1-back") })],
     });
     expect(types((await sync(twoFaced(null))).events)).toEqual(["CardRegistered"]);
     const { events } = await sync(twoFaced(5));
@@ -312,10 +311,7 @@ describe("SyncCard", () => {
     const { sync } = store();
     const first = await sync(snapshot());
     const renamed = edition("ed-1", { isDefault: true });
-    const reassigned = {
-      ...renamed,
-      faces: [{ ...renamed.faces[0]!, sourceId: "ed-1-new" }],
-    };
+    const reassigned = { ...renamed, front: { ...renamed.front, sourceId: "ed-1-new" } };
     const { card, events } = await sync(snapshot({ editions: [reassigned] }));
     expect(types(events)).toEqual(["CardEditionRevised"]);
     expect(card.state?.editions.map((e) => e.id)).toEqual(
@@ -348,10 +344,7 @@ describe("SyncCard", () => {
     const base = snapshot();
     const twoFaced: CardSnapshot = {
       ...base,
-      faces: [
-        ...base.faces,
-        { ...base.faces[0]!, side: "back", sourceId: "Back1", slug: "back-slug" },
-      ],
+      back: { ...base.front, sourceId: "Back1", slug: "back-slug" },
     };
     const { events } = await sync(twoFaced);
     expect(types(events)).toEqual(["CardSyncRejected"]);

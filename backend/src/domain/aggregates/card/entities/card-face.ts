@@ -6,7 +6,7 @@ import { CardSpeed } from "../../../value-objects/card-speed.js";
 import { CardType } from "../../../value-objects/card-type.js";
 import { EffectText } from "../../../value-objects/effect-text.js";
 import { Element } from "../../../value-objects/element.js";
-import { FaceSide } from "../../../value-objects/face-side.js";
+import type { FaceSide } from "../../../value-objects/face-side.js";
 import { PlainEffectText } from "../../../value-objects/plain-effect-text.js";
 import { Slug } from "../../../value-objects/slug.js";
 import { SourceId } from "../../../value-objects/source-id.js";
@@ -28,9 +28,9 @@ export type CardFace = {
 };
 
 /** 業務の規則に合わない値があれば RuleViolation を投げる。 */
-export function parseCardFace(face: CardFaceSnapshot): CardFace {
+export function parseCardFace(face: CardFaceSnapshot, side: FaceSide): CardFace {
   return {
-    side: FaceSide(face.side),
+    side,
     sourceId: SourceId(face.sourceId),
     slug: Slug(face.slug),
     characteristics: CardCharacteristics({

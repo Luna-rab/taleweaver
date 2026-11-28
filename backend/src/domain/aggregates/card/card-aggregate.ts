@@ -1,7 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 
 import { CalendarDate } from "../../value-objects/calendar-date.js";
+import type { CardId } from "../../value-objects/card-id.js";
 import { CardReference } from "../../value-objects/card-reference.js";
+import type { CardSetId } from "../../value-objects/card-set-id.js";
 import { CollectorNumber } from "../../value-objects/collector-number.js";
 import { FaceSide } from "../../value-objects/face-side.js";
 import { Legality } from "../../value-objects/legality.js";
@@ -32,8 +34,11 @@ import type { CardOperations } from "./operations.js";
  * エディションの面までを持つ。セットと画像は別の集約で、id でだけ参照する。
  *
  * execute は何が起きたかを必ず 1 件以上のイベントで返す。
- * application は execute のたびに、changesState に当たるイベントがあれば state を repository.save に渡す。
- * state は最後に処理したコマンドの結果なので、保存する前に次のコマンドを送ると前の結果は失われる。
+ * application は changesState に当たるイベントがあれば state を repository.save に渡す。
+ *
+ * 1 つのインスタンスは 1 枚のカードだけを扱う。SyncCard はカードの id を持たないので、どのカードかは
+ * 最初のコマンドの照合で決まる。決まった後のコマンドは DB ではなく state と照合し、別のカードに当たれば例外を投げる。
+ * DB と照合すると、まだ保存していない登録や改訂を見落とすため。
  */
 export class CardAggregate {
   readonly #ops: CardOperations;
@@ -43,12 +48,11 @@ export class CardAggregate {
     this.#ops = ops;
   }
 
-  /** コマンドを処理した後の状態。拒否したときは保存済みの状態で、保存済みのカードがなければ null。 */
+  /** このインスタンスが扱うカードの、最後のコマンドを処理した後の状態。拒否したときは前の状態のまま。 */
   get state(): Card | null {
     return this.#state;
   }
 
-  /** コマンドを処理し、起きたことをイベントで返す。 */
   async execute(command: CardCommand): Promise<readonly CardEvent[]> {
     switch (command.type) {
       case "SyncCard":
@@ -59,37 +63,51 @@ export class CardAggregate {
   }
 
   /**
-   * 同期中に業務の規則に合わない値（RuleViolation）が見つかったら、CardSyncRejected に変える。
-   * #sync は state を次の状態に変える前に規則を確かめ終えるので、拒否したとき state は保存済みの状態のまま。
-   * RuleViolation 以外（セットが未同期、DB の障害など）は業務の結果ではないので、そのまま投げる。
+   * 同期し、業務の規則に合わなければ CardSyncRejected を返す。
+   * #sync は規則を確かめ終えてから state を書き換えるので、拒否したとき state は前の状態のまま。
    */
   async #syncOrReject(command: SyncCard): Promise<readonly CardEvent[]> {
+    // 拒否の cardId には今回のコマンドで照合できたカードだけを載せるので、照合と同期の 2 段に分けて捕まえる。
+    // 照合の前に拒否したときは、スナップショットがどのカードのものか分からないので null にする。
+    let matched: Matched;
     try {
-      return await this.#sync(command);
+      matched = await this.#match(command.snapshot);
     } catch (error) {
-      if (!(error instanceof RuleViolation)) throw error;
-      return [
-        {
-          type: "CardSyncRejected",
-          cardId: this.#state?.id ?? null,
-          frontSourceId: command.snapshot.faces.find((f) => f.side === "front")?.sourceId ?? null,
-          reason: error.message,
-        },
-      ];
+      return rejection(error, command, null);
+    }
+    try {
+      return await this.#sync(command, matched);
+    } catch (error) {
+      return rejection(error, command, matched.existing?.id ?? null);
     }
   }
 
+  /** スナップショットを読み、保存済みのカードと照合する。見つからなければ existing は null。 */
+  async #match(snapshot: CardSnapshot): Promise<Matched> {
+    const parsed = parseSnapshot(snapshot);
+    const found = await this.#findExisting(parsed.faces);
+    // slug で見つけたカードの元の sourceId が今回の取得にも残っているなら、スナップショットは slug が重なった
+    // 別のカード。見つけたカードの同期ではないので、照合の段で拒否して cardId を null にする。
+    if (found?.bySlug) {
+      await this.#ensureSourceIdReassigned(frontFace(parsed).slug, frontFace(found.card).sourceId);
+    }
+    return { parsed, existing: found && normalize(found.card) };
+  }
+
   /**
-   * 取得元のカード 1 枚分から次の状態を組み立て、保存している状態と比べてイベントを決める。
+   * 照合したカードと取得元のカード 1 枚分から次の状態を組み立て、比べてイベントを決める。
    * 保存していなければ CardRegistered、同じなら CardUnchanged、違えば違う箇所ごとのイベントを返す。
    * 比べる前に両方を normalize し、配列の並び順だけの違いを「変わった」と判定しない。
    */
-  async #sync(command: SyncCard): Promise<readonly CardEvent[]> {
-    const parsed = parseSnapshot(command.snapshot);
-    const found = await this.#findExisting(parsed.faces);
-    const existing = found && normalize(found);
-    this.#state = existing;
-
+  async #sync(command: SyncCard, { parsed, existing }: Matched): Promise<readonly CardEvent[]> {
+    // 両面カードが片面になることも、片面カードに裏面が付くこともない。取得元の誤りとして拒否し、
+    // 取り下げて残すエディションの面の組がカードの面の組とずれないようにする。
+    if (existing !== null) {
+      ensure(
+        isDeepStrictEqual(sidesOf(existing), sidesOf(parsed)),
+        `面の組が保存済みのカード（${sidesOf(existing).join("・")}）から変わった`,
+      );
+    }
     const editions = await this.#mergeEditions(parsed.editions, existing, command.syncedAt);
     const next = normalize({
       id: existing?.id ?? this.#ops.newCardId(),
@@ -105,7 +123,10 @@ export class CardAggregate {
       this.#state = next;
       return [{ type: "CardRegistered", cardId: next.id, card: next }];
     }
-    if (isDeepStrictEqual(next, existing)) return [{ type: "CardUnchanged", cardId: existing.id }];
+    if (isDeepStrictEqual(next, existing)) {
+      this.#state = existing;
+      return [{ type: "CardUnchanged", cardId: existing.id }];
+    }
 
     const events = [...diffEvents(existing, next), ...editions.events];
     // 状態の変化はどれもイベントで表す約束なので、イベントのない変化はこの集約の誤り。
@@ -120,7 +141,12 @@ export class CardAggregate {
    * 取り下げるカードは selectCardsToWithdraw が保存済みのものから選ぶので、見つからないのは手順の誤りとして例外にする。
    */
   async #withdraw(command: WithdrawCard): Promise<readonly CardEvent[]> {
-    const found = await this.#ops.findById(command.cardId);
+    if (this.#state !== null && this.#state.id !== command.cardId) {
+      throw new Error(
+        `カード ${this.#state.id} を扱うインスタンスに、別のカード ${command.cardId} の取り下げが送られた`,
+      );
+    }
+    const found = this.#state ?? (await this.#ops.findById(command.cardId));
     if (found === null) throw new Error(`取り下げるカードがない: ${command.cardId}`);
     const existing = normalize(found);
     this.#state = existing;
@@ -131,28 +157,30 @@ export class CardAggregate {
   }
 
   /**
-   * 表の面の sourceId で照合し、見つからなければ slug で照合する（取得元が id を振り直したとき）。
-   * slug で見つかったカードの元の sourceId が今回の取得にも残っているなら、振り直しではないので拒否する。
+   * 表の面の sourceId で探し、見つからなければ slug で探す（取得元が id を振り直したとき）。
+   * このインスタンスがすでにカードを扱っていれば、DB ではなくそのカードと照合する。
    */
-  async #findExisting(faces: readonly CardFace[]): Promise<Card | null> {
+  async #findExisting(faces: readonly CardFace[]): Promise<Found | null> {
     const front = frontFace({ faces });
+    if (this.#state !== null) return matchCurrent(this.#state, front);
+
     const bySourceId = await this.#ops.findByFrontSourceId(front.sourceId);
-    if (bySourceId !== null) return bySourceId;
+    if (bySourceId !== null) return { card: bySourceId, bySlug: false };
 
     const bySlug = await this.#ops.findByFrontSlug(front.slug);
-    if (bySlug === null) return null;
-    const previousSourceId = frontFace(bySlug).sourceId;
+    return bySlug === null ? null : { card: bySlug, bySlug: true };
+  }
+
+  /** slug で見つかったカードの元の sourceId が今回の取得にも残っているなら、id の振り直しではないので拒否する。 */
+  async #ensureSourceIdReassigned(slug: Slug, previousSourceId: SourceId): Promise<void> {
     ensure(
       !(await this.#ops.isInCurrentFetch(previousSourceId)),
-      `slug ${front.slug} のカードは sourceId ${previousSourceId} で既にあり、その sourceId も今回の取得に残っている`,
+      `slug ${slug} のカードは sourceId ${previousSourceId} で既にあり、その sourceId も今回の取得に残っている`,
     );
-    return bySlug;
   }
 
   /**
    * 取得したエディションを保存しているエディションと照合し、次のエディションの一覧とイベントを返す。
-   * 照合はカードと同じく、表の面の sourceId、次に slug の順。照合できたものは id を引き継ぐ。
-   * 取得に無かった保存済みのエディションは消さず、取り下げた時刻を付けて既定から外す。
    * 新しいカードのとき（existing が null）は CardRegistered が全体を表すので、エディションのイベントは出さない。
    */
   async #mergeEditions(
@@ -160,148 +188,214 @@ export class CardAggregate {
     existing: Card | null,
     syncedAt: Date,
   ): Promise<{ state: CardEdition[]; events: CardEvent[] }> {
-    const cardId = existing?.id;
+    const cardId = existing?.id ?? null;
     const previous = existing?.editions ?? [];
-    const matched = new Set<CardEdition>();
     const incomingSourceIds = new Set(parsed.map((e) => frontEditionFace(e).sourceId));
-    const state: CardEdition[] = [];
-    const events: CardEvent[] = [];
+    const matches = parsed.map((edition) => ({
+      edition,
+      match: matchEdition(edition, previous, incomingSourceIds),
+    }));
+    const matchedPrevious = matches.flatMap(({ match }) => (match === undefined ? [] : [match]));
 
-    for (const edition of parsed) {
-      const front = frontEditionFace(edition);
-      let match = previous.find((p) => frontEditionFace(p).sourceId === front.sourceId);
-      if (match === undefined) {
-        match = previous.find((p) => frontEditionFace(p).slug === front.slug);
-        if (match !== undefined) {
-          const previousSourceId = frontEditionFace(match).sourceId;
-          ensure(
-            !incomingSourceIds.has(previousSourceId),
-            `エディションの slug ${front.slug} は sourceId ${previousSourceId} で既にあり、その sourceId も今回の取得に残っている`,
-          );
-        }
-      }
-      ensure(
-        match === undefined || !matched.has(match),
-        `エディション ${front.sourceId} が既存の 2 つと照合された`,
-      );
-      if (match !== undefined) matched.add(match);
+    // セットを先に全部引いてから id を振る。並行に引きながら振ると、UUID v7 の時刻順が取得元の並び順とずれるため。
+    const setIds = await Promise.all(matches.map(({ edition }) => this.#setIdOf(edition)));
+    const kept = matches.map(({ edition, match }, i) =>
+      this.#mergeEdition(edition, match, setIds[i]!, cardId),
+    );
+    const gone = previous
+      .filter((p) => !matchedPrevious.includes(p))
+      .map((edition) => withdrawEdition(edition, cardId, syncedAt));
+    const results = [...kept, ...gone];
+    return { state: results.map((r) => r.edition), events: results.flatMap((r) => r.events) };
+  }
 
-      const setId = await this.#ops.findSetIdBySourceId(edition.setSourceId);
-      // セットはジョブが先に同期する。無いのは手順の誤りなので、拒否ではなく例外にする。
-      if (setId === null) throw new Error(`セットが同期されていない: ${edition.setSourceId}`);
+  async #setIdOf(edition: ParsedEdition): Promise<CardSetId> {
+    const setId = await this.#ops.findSetIdBySourceId(edition.setSourceId);
+    // セットはジョブが先に同期する。無いのは手順の誤りなので、拒否ではなく例外にする。
+    if (setId === null) throw new Error(`セットが同期されていない: ${edition.setSourceId}`);
+    return setId;
+  }
 
-      const id = match?.id ?? this.#ops.newCardEditionId();
-      const merged: CardEdition = {
-        id,
-        setId,
-        collectorNumber: edition.collectorNumber,
-        rarity: edition.rarity,
-        isDefault: edition.isDefault,
-        withdrawnAt: null,
-        faces: edition.faces,
-      };
-      state.push(merged);
-      if (match !== undefined && cardId !== undefined) {
-        if (match.withdrawnAt !== null) {
-          events.push({ type: "CardEditionReinstated", cardId, editionId: id });
-        }
-        // 取り下げていた間は既定から外しているので、戻ったときの既定の変化も Revised で表す。
-        if (!isDeepStrictEqual({ ...match, withdrawnAt: null }, merged)) {
-          events.push({ type: "CardEditionRevised", cardId, before: match, after: merged });
-        }
-      }
-      if (match === undefined && cardId !== undefined) {
-        events.push({
-          type: "CardEditionAdded",
-          cardId,
-          editionId: id,
-          faces: edition.faces.map((f) => ({
-            side: f.side,
-            sourceId: f.sourceId,
-            imageSourcePath: f.imageSourcePath,
-          })),
-        });
-      }
-    }
-
-    for (const edition of previous) {
-      if (matched.has(edition)) continue;
-      if (edition.withdrawnAt === null && cardId !== undefined) {
-        events.push({ type: "CardEditionWithdrawn", cardId, editionId: edition.id });
-      }
-      state.push({ ...edition, isDefault: false, withdrawnAt: edition.withdrawnAt ?? syncedAt });
-    }
-
-    return { state, events };
+  /** 取得したエディションを、照合できた既存のエディション（なければ新しい id）に重ねる。 */
+  #mergeEdition(
+    edition: ParsedEdition,
+    match: CardEdition | undefined,
+    setId: CardSetId,
+    cardId: CardId | null,
+  ): EditionResult {
+    const merged: CardEdition = {
+      id: match?.id ?? this.#ops.newCardEditionId(),
+      setId,
+      collectorNumber: edition.collectorNumber,
+      rarity: edition.rarity,
+      isDefault: edition.isDefault,
+      withdrawnAt: null,
+      faces: edition.faces,
+    };
+    return { edition: merged, events: cardId === null ? [] : editionEvents(cardId, match, merged) };
   }
 }
 
+type EditionResult = { readonly edition: CardEdition; readonly events: readonly CardEvent[] };
+
+type Found = { readonly card: Card; readonly bySlug: boolean };
+
+/** 別のカードに当たるのは、インスタンスを使い回した application の誤りなので、拒否ではなく例外にする。 */
+function matchCurrent(current: Card, front: CardFace): Found {
+  const currentFront = frontFace(current);
+  if (currentFront.sourceId === front.sourceId) return { card: current, bySlug: false };
+  if (currentFront.slug !== front.slug) {
+    throw new Error(
+      `カード ${current.id} を扱うインスタンスに、別のカード（sourceId ${front.sourceId}）の同期が送られた`,
+    );
+  }
+  return { card: current, bySlug: true };
+}
+
 /**
- * カード本体（エディション以外）の前後を比べ、違う箇所ごとのイベントを返す。
- * 面は表と裏それぞれで、ルールに関わる特性（CardCharacteristicsChanged）とそれ以外（CardFaceRevised）に分ける。
- * 裁定は題・日付・本文の 3 つで同じものを探し、増えた・消えた・並びだけ変わったを区別する。
+ * 表の面の sourceId で照合し、見つからなければ slug で照合する。
+ * slug で見つかったエディションの元の sourceId が今回の取得にも残っているなら、id の振り直しではないので拒否する。
  */
+function matchEdition(
+  edition: ParsedEdition,
+  previous: readonly CardEdition[],
+  incomingSourceIds: ReadonlySet<SourceId>,
+): CardEdition | undefined {
+  const front = frontEditionFace(edition);
+  const bySourceId = previous.find((p) => frontEditionFace(p).sourceId === front.sourceId);
+  if (bySourceId !== undefined) return bySourceId;
+
+  const bySlug = previous.find((p) => frontEditionFace(p).slug === front.slug);
+  if (bySlug === undefined) return undefined;
+  const previousSourceId = frontEditionFace(bySlug).sourceId;
+  ensure(
+    !incomingSourceIds.has(previousSourceId),
+    `エディションの slug ${front.slug} は sourceId ${previousSourceId} で既にあり、その sourceId も今回の取得に残っている`,
+  );
+  return bySlug;
+}
+
+/** 既存のカードのエディション 1 つについて、照合の結果からイベントを決める。 */
+function editionEvents(
+  cardId: CardId,
+  match: CardEdition | undefined,
+  merged: CardEdition,
+): CardEvent[] {
+  if (match === undefined) {
+    return [
+      {
+        type: "CardEditionAdded",
+        cardId,
+        editionId: merged.id,
+        faces: merged.faces.map((f) => ({
+          side: f.side,
+          sourceId: f.sourceId,
+          imageSourcePath: f.imageSourcePath,
+        })),
+      },
+    ];
+  }
+  return [
+    ...(match.withdrawnAt === null
+      ? []
+      : [{ type: "CardEditionReinstated" as const, cardId, editionId: merged.id }]),
+    // 取り下げていた間は既定から外しているので、戻ったときの既定の変化も Revised で表す。
+    ...(isDeepStrictEqual({ ...match, withdrawnAt: null }, merged)
+      ? []
+      : [{ type: "CardEditionRevised" as const, cardId, before: match, after: merged }]),
+  ];
+}
+
+/** 取得に無かった保存済みのエディションに、取り下げた時刻を付けて既定から外す。 */
+function withdrawEdition(
+  edition: CardEdition,
+  cardId: CardId | null,
+  syncedAt: Date,
+): EditionResult {
+  return {
+    edition: { ...edition, isDefault: false, withdrawnAt: edition.withdrawnAt ?? syncedAt },
+    events:
+      edition.withdrawnAt === null && cardId !== null
+        ? [{ type: "CardEditionWithdrawn", cardId, editionId: edition.id }]
+        : [],
+  };
+}
+
+/** カード本体（エディション以外）の前後を比べ、違う箇所ごとのイベントを返す。 */
 function diffEvents(before: Card, after: Card): CardEvent[] {
   const cardId = after.id;
-  const events: CardEvent[] = [];
-
-  if (before.withdrawnAt !== null) events.push({ type: "CardReinstated", cardId });
-
-  for (const side of [FaceSide("front"), FaceSide("back")]) {
-    const b = before.faces.find((f) => f.side === side) ?? null;
-    const a = after.faces.find((f) => f.side === side) ?? null;
-    if (!isDeepStrictEqual(a?.characteristics ?? null, b?.characteristics ?? null)) {
-      events.push({
-        type: "CardCharacteristicsChanged",
-        cardId,
-        side,
-        before: b?.characteristics ?? null,
-        after: a?.characteristics ?? null,
-      });
-    }
-    // 面が増えた・減ったときは CardCharacteristicsChanged が表すので、両方にある面だけを比べる。
-    if (
-      a !== null &&
-      b !== null &&
-      !isDeepStrictEqual({ ...a, characteristics: null }, { ...b, characteristics: null })
-    ) {
-      events.push({ type: "CardFaceRevised", cardId, side, before: b, after: a });
-    }
-  }
-
-  const added = after.rulings.filter((r) => !before.rulings.some((b) => sameRuling(b, r)));
-  const removed = before.rulings.filter((r) => !after.rulings.some((a) => sameRuling(a, r)));
-  for (const ruling of added) {
-    events.push({ type: "CardRulingAdded", cardId, ruling, isErrata: isErrata(ruling) });
-  }
-  for (const ruling of removed) events.push({ type: "CardRulingRemoved", cardId, ruling });
-  if (
-    added.length === 0 &&
-    removed.length === 0 &&
-    !isDeepStrictEqual(before.rulings, after.rulings)
-  ) {
-    events.push({ type: "CardRulingsReordered", cardId, rulings: after.rulings });
-  }
-
-  const referencesAdded = after.references.filter(
-    (r) => !before.references.some((b) => sameReference(b, r)),
-  );
-  const referencesRemoved = before.references.filter(
-    (r) => !after.references.some((a) => sameReference(a, r)),
-  );
-  if (referencesAdded.length > 0 || referencesRemoved.length > 0) {
-    events.push({
-      type: "CardReferencesChanged",
-      cardId,
-      added: referencesAdded,
-      removed: referencesRemoved,
-    });
-  }
-
   const changes = diffLegality(before.legality, after.legality);
-  if (changes.length > 0) events.push({ type: "CardLegalityChanged", cardId, changes });
+  return [
+    ...(before.withdrawnAt === null ? [] : [{ type: "CardReinstated" as const, cardId }]),
+    // #sync が面の組が変わらないことを確かめ、どちらも表・裏の順に並べてあるので、同じ位置の面どうしを比べる。
+    ...before.faces.flatMap((face, i) => faceEvents(cardId, face, after.faces[i]!)),
+    ...rulingEvents(cardId, before.rulings, after.rulings),
+    ...referenceEvents(cardId, before.references, after.references),
+    ...(changes.length === 0 ? [] : [{ type: "CardLegalityChanged" as const, cardId, changes }]),
+  ];
+}
 
-  return events;
+/** 同じ側の面の前後を、ルールに関わる特性とそれ以外に分けて比べる。 */
+function faceEvents(cardId: CardId, before: CardFace, after: CardFace): CardEvent[] {
+  const side = after.side;
+  return [
+    ...(isDeepStrictEqual(before.characteristics, after.characteristics)
+      ? []
+      : [
+          {
+            type: "CardCharacteristicsChanged" as const,
+            cardId,
+            side,
+            before: before.characteristics,
+            after: after.characteristics,
+          },
+        ]),
+    ...(isDeepStrictEqual({ ...before, characteristics: null }, { ...after, characteristics: null })
+      ? []
+      : [{ type: "CardFaceRevised" as const, cardId, side, before, after }]),
+  ];
+}
+
+function sidesOf(card: { readonly faces: readonly CardFace[] }): FaceSide[] {
+  return card.faces.map((f) => f.side);
+}
+
+function rulingEvents(
+  cardId: CardId,
+  before: readonly Ruling[],
+  after: readonly Ruling[],
+): CardEvent[] {
+  const added = after.filter((r) => !before.some((b) => sameRuling(b, r)));
+  const removed = before.filter((r) => !after.some((a) => sameRuling(a, r)));
+  // 増えた・消えた裁定を除き、両方に残った裁定の順で比べる。増減と並び替えが同時に起きても並び替えを知らせるため。
+  // 重複がなければ、残った裁定は前後で同じ集まりになる。after は parseSnapshot が重複を拒否し、
+  // before も保存する前に同じ確認を通っている。
+  const keptBefore = before.filter((r) => after.some((a) => sameRuling(a, r)));
+  const keptAfter = after.filter((r) => before.some((b) => sameRuling(b, r)));
+  return [
+    ...added.map((ruling) => ({
+      type: "CardRulingAdded" as const,
+      cardId,
+      ruling,
+      isErrata: isErrata(ruling),
+    })),
+    ...removed.map((ruling) => ({ type: "CardRulingRemoved" as const, cardId, ruling })),
+    ...(isDeepStrictEqual(keptBefore, keptAfter)
+      ? []
+      : [{ type: "CardRulingsReordered" as const, cardId, rulings: after }]),
+  ];
+}
+
+function referenceEvents(
+  cardId: CardId,
+  before: readonly CardReference[],
+  after: readonly CardReference[],
+): CardEvent[] {
+  const added = after.filter((r) => !before.some((b) => sameReference(b, r)));
+  const removed = before.filter((r) => !after.some((a) => sameReference(a, r)));
+  return added.length === 0 && removed.length === 0
+    ? []
+    : [{ type: "CardReferencesChanged", cardId, added, removed }];
 }
 
 /** CardLegalityChanged に載せる、1 フォーマット分の上限の変化。 */
@@ -315,9 +409,16 @@ export type LegalityChange = {
 /** 上限が変わったフォーマットを、名前の順に返す。 */
 function diffLegality(before: Legality, after: Legality): LegalityChange[] {
   const formats = [...new Set([...Object.keys(before), ...Object.keys(after)])].toSorted();
-  return formats
-    .map((format) => ({ format, before: before[format] ?? null, after: after[format] ?? null }))
-    .filter((c) => c.before !== c.after);
+  return (
+    formats
+      // Object.hasOwn で自分のキーだけを読む。"constructor" のようなフォーマット名で、継承した関数を拾わないため。
+      .map((format) => ({
+        format,
+        before: Object.hasOwn(before, format) ? before[format]! : null,
+        after: Object.hasOwn(after, format) ? after[format]! : null,
+      }))
+      .filter((c) => c.before !== c.after)
+  );
 }
 
 /** 種類と参照先の slug が同じなら同じ参照とみなす（DB の主キーと同じ組）。 */
@@ -329,44 +430,61 @@ type ParsedEdition = Omit<CardEdition, "id" | "setId" | "withdrawnAt"> & {
   readonly setSourceId: SourceId;
 };
 
+type Matched = {
+  readonly parsed: ReturnType<typeof parseSnapshot>;
+  readonly existing: Card | null;
+};
+
+/** RuleViolation を CardSyncRejected に変える。それ以外の例外は業務の結果ではないので、そのまま投げる。 */
+function rejection(error: unknown, command: SyncCard, cardId: CardId | null): CardEvent[] {
+  if (!(error instanceof RuleViolation)) throw error;
+  return [
+    {
+      type: "CardSyncRejected",
+      cardId,
+      frontSourceId: command.snapshot.front.sourceId,
+      reason: error.message,
+    },
+  ];
+}
+
 /**
  * 取得元のカード 1 枚分を value object とエンティティに変え、カードとエディションをまたぐ規則を確かめる。
  * 規則に合わなければ RuleViolation を投げる（#syncOrReject が CardSyncRejected に変える）。
  */
 function parseSnapshot(snapshot: CardSnapshot) {
-  const faces = sortBySide(snapshot.faces.map(parseCardFace));
-  const sides = faces.map((f) => f.side);
-  ensure(sides[0] === "front", "表の面がない");
-  ensure(new Set(sides).size === sides.length, "同じ側の面が 2 つある");
+  const faces = [
+    parseCardFace(snapshot.front, FaceSide("front")),
+    ...(snapshot.back === null ? [] : [parseCardFace(snapshot.back, FaceSide("back"))]),
+  ];
 
   ensure(snapshot.editions.length > 0, "エディションが 1 つもない");
-  const editions = snapshot.editions.map(parseEdition);
-  for (const edition of editions) {
+  for (const edition of snapshot.editions) {
     ensure(
-      isDeepStrictEqual(
-        edition.faces.map((f) => f.side),
-        sides,
-      ),
-      `エディション ${frontEditionFace(edition).sourceId} の面の組がカードの面の組とそろわない`,
+      (edition.back === null) === (snapshot.back === null),
+      `エディション ${edition.front.sourceId} の面の組がカードの面の組とそろわない`,
     );
   }
+  const editions = snapshot.editions.map(parseEdition);
   ensure(editions.filter((e) => e.isDefault).length <= 1, "既定のエディションが 2 つ以上ある");
-  const editionFaceIds = editions.flatMap((e) => e.faces.map((f) => f.sourceId));
+
+  const rulings = snapshot.rulings.map((r) =>
+    Ruling({
+      title: r.title === null ? null : RulingTitle(r.title),
+      addedOn: CalendarDate(r.addedOn),
+      description: RulingDescription(r.description),
+    }),
+  );
+  // 裁定は 3 つの値で同じものを探すので、重複があると増減や並び替えを判定できない。
   ensure(
-    new Set(editionFaceIds).size === editionFaceIds.length,
-    "エディションの面の sourceId が重複している",
+    rulings.every((r, i) => rulings.findIndex((o) => sameRuling(o, r)) === i),
+    "同じ裁定が 2 つある",
   );
 
   return {
     faces,
     legality: Legality(snapshot.legality),
-    rulings: snapshot.rulings.map((r) =>
-      Ruling({
-        title: r.title === null ? null : RulingTitle(r.title),
-        addedOn: CalendarDate(r.addedOn),
-        description: RulingDescription(r.description),
-      }),
-    ),
+    rulings,
     references: snapshot.references.map((r) =>
       CardReference({ kind: ReferenceKind(r.kind), targetSlug: Slug(r.targetSlug) }),
     ),
@@ -384,7 +502,10 @@ function parseEdition(edition: CardEditionSnapshot): ParsedEdition {
     collectorNumber: CollectorNumber(edition.collectorNumber),
     rarity: Rarity(edition.rarity),
     isDefault: edition.isDefault,
-    faces: sortBySide(edition.faces.map(parseCardEditionFace)),
+    faces: [
+      parseCardEditionFace(edition.front, FaceSide("front")),
+      ...(edition.back === null ? [] : [parseCardEditionFace(edition.back, FaceSide("back"))]),
+    ],
   };
 }
 
