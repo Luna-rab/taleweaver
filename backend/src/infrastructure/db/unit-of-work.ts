@@ -1,7 +1,9 @@
+import { eq } from "drizzle-orm";
+
 import { subscriptions } from "../../application/policies/subscriptions.js";
 import type {
   AggregateRef,
-  EventWriter,
+  EventStore,
   Transaction,
   UnitOfWork,
 } from "../../application/ports/unit-of-work.js";
@@ -27,13 +29,13 @@ export class DrizzleUnitOfWork implements UnitOfWork {
         cards: new DrizzleCardRepository(tx),
         cardSets: new DrizzleCardSetRepository(tx),
         images: new DrizzleImageRepository(tx),
-        events: new DrizzleEventWriter(tx, this.#ids),
+        events: new DrizzleEventStore(tx, this.#ids),
       }),
     );
   }
 }
 
-class DrizzleEventWriter implements EventWriter {
+class DrizzleEventStore implements EventStore {
   readonly #tx: Tx;
   readonly #ids: UuidV7IdGenerator;
 
@@ -65,5 +67,14 @@ class DrizzleEventWriter implements EventWriter {
       })),
     );
     if (jobs.length > 0) await this.#tx.insert(policyJobs).values(jobs);
+  }
+
+  async findById(id: string): Promise<{ readonly type: string } | null> {
+    const [row] = await this.#tx
+      .select({ payload: domainEvents.payload })
+      .from(domainEvents)
+      .where(eq(domainEvents.id, id));
+    // payload は append が書いた集約のイベントそのものなので、形を確かめずに型だけを付ける。
+    return row === undefined ? null : (row.payload as { readonly type: string });
   }
 }
