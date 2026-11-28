@@ -11,6 +11,8 @@ import type { CardFace } from "./card-face.js";
  */
 export type Card = {
   readonly id: CardId;
+  /** 楽観ロックの版番号。集約は書き換えず、repository の save が読んだときの版と比べて 1 上げる。 */
+  readonly version: number;
   readonly front: CardFace;
   /** 片面のカードは null。 */
   readonly back: CardFace | null;

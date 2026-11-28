@@ -41,10 +41,14 @@ export class CardSetAggregate {
   async #sync(command: SyncCardSet): Promise<readonly CardSetEvent[]> {
     const parsed = parseSnapshot(command.snapshot);
     const existing = await this.#findExisting(parsed);
-    const next: CardSet = { id: existing?.id ?? this.#ops.newCardSetId(), ...parsed };
+    const next: CardSet = {
+      id: existing?.id ?? this.#ops.newCardSetId(),
+      version: existing?.version ?? 0,
+      ...parsed,
+    };
     if (existing === null) {
       this.#state = next;
-      return [{ type: "CardSetRegistered", cardSetId: next.id, cardSet: next }];
+      return [{ type: "CardSetRegistered", cardSetId: next.id }];
     }
     if (isDeepStrictEqual(next, existing)) {
       this.#state = existing;
@@ -92,7 +96,7 @@ export class CardSetAggregate {
   }
 }
 
-type ParsedCardSet = Omit<CardSet, "id">;
+type ParsedCardSet = Omit<CardSet, "id" | "version">;
 
 /** 取得元のセット 1 つ分を value object に変える。規則に合わなければ RuleViolation を投げる。 */
 function parseSnapshot(snapshot: CardSetSnapshot): ParsedCardSet {

@@ -128,6 +128,7 @@ describe("SyncCard", () => {
     const { card, decision } = await sync(snapshot());
     expect(types(decision)).toEqual(["CardRegistered"]);
     expect(card.state?.editions).toHaveLength(1);
+    expect(card.state?.version).toBe(0);
   });
 
   it("同じスナップショットをもう一度送ると、イベントを出さずに受け付け、状態を変えない", async () => {
@@ -138,15 +139,17 @@ describe("SyncCard", () => {
     expect(card.state).toEqual(first.card.state);
   });
 
-  it("面のルールに関わらない値が変わると CardFaceRevised を出す", async () => {
-    const { sync } = store();
-    await sync(snapshot());
-    const { decision } = await sync(
+  it("面のルールに関わらない値が変わると CardFaceRevised を出し、版は読んだときのまま", async () => {
+    const { cards, sync } = store();
+    const registered = (await sync(snapshot())).card.state!;
+    cards.set(registered.id, { ...registered, version: 3 });
+    const { card, decision } = await sync(
       withFront(snapshot(), { slug: "lorraine-blademaster-2", effectRaw: "x" }),
     );
     expect(eventsOf(decision)).toMatchObject([
       { type: "CardFaceRevised", side: "front", after: { effectRaw: "x" } },
     ]);
+    expect(card.state?.version).toBe(3);
   });
 
   it("コストが変わると CardCharacteristicsChanged を出す", async () => {

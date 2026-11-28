@@ -1,7 +1,7 @@
 import type { ImageId } from "../../value-objects/image-id.js";
 
 // 画像の取得は application が行い、結果をコマンドで渡す。集約は取得した結果からイベントを決めるだけで、
-// ファイルを受け取らない。ファイルは application がイベントの storageKey に置く。
+// ファイルを受け取らない。ファイルは application が集約の state の storageKey に置く。
 
 /** 取得元から画像を取得できた。値は検証前のもの。 */
 export type FetchedSourceImage = {
@@ -22,18 +22,17 @@ export type SourceImageNotModified = { readonly kind: "notModified" };
 /** 取得元の画像を初めて保存する。 */
 export type RegisterSourceImage = {
   readonly type: "RegisterSourceImage";
-  readonly sourceUrl: string;
   readonly fetched: FetchedSourceImage | SourceImageNotFound;
 };
 
 /**
  * 保存済みの画像を取得元に問い合わせた結果を反映する。
- * 取得元の URL が変わっていれば、ETag を付けずに取得し直して送る（304 は前と同じ URL のときだけ受け付ける）。
+ * 集約は取得元の場所を持たないので、304 が前と同じ場所への答えかを確かめられない。エディションの面の
+ * imageSourcePath が変わったときは、問い合わせを積む側が ETag を付けずに取得させる。
  */
 export type RefreshSourceImage = {
   readonly type: "RefreshSourceImage";
   readonly imageId: ImageId;
-  readonly sourceUrl: string;
   readonly fetched: FetchedSourceImage | SourceImageNotFound | SourceImageNotModified;
 };
 

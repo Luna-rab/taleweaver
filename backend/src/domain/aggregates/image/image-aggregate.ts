@@ -3,7 +3,6 @@ import { ETag } from "../../value-objects/etag.js";
 import { ImageContentType } from "../../value-objects/image-content-type.js";
 import { ImageDimensions } from "../../value-objects/image-dimensions.js";
 import type { ImageId } from "../../value-objects/image-id.js";
-import { ImageSourceUrl } from "../../value-objects/image-source-url.js";
 import { ensure } from "../../value-objects/utils/rule-violation.js";
 import { accepted, type Decision, decide } from "../decision.js";
 import type {
@@ -53,9 +52,8 @@ export class ImageAggregate {
     return await decide(() => {
       const fetched = parseFetched(command.fetched);
       const id = this.#ops.newImageId();
-      const image = this.#toImage(id, ImageSourceUrl(command.sourceUrl), fetched);
-      this.#state = image;
-      return [{ type: "ImageRegistered", imageId: id, image }];
+      this.#state = this.#toImage(id, 0, fetched);
+      return [{ type: "ImageRegistered", imageId: id }];
     });
   }
 
@@ -69,36 +67,24 @@ export class ImageAggregate {
     if (existing.source === null) {
       throw new Error(`画像 ${existing.id} はアップロードされたもので、取得元がない`);
     }
-    const url = ImageSourceUrl(command.sourceUrl);
-    if (command.fetched.kind === "notModified") {
-      // 304 は送った ETag の URL についての答えなので、URL が変わっていれば application が古い ETag を付けている。
-      if (url !== existing.source.url) {
-        throw new Error(`画像 ${existing.id} の取得元が変わったのに、前の ETag で問い合わせた`);
-      }
-      return accepted([]);
-    }
+    if (command.fetched.kind === "notModified") return accepted([]);
     const fetched = command.fetched;
     return await decide(() => {
-      const image = this.#toImage(existing.id, url, parseFetched(fetched));
-      this.#state = image;
+      this.#state = this.#toImage(existing.id, existing.version, parseFetched(fetched));
       return [
-        {
-          type: "ImageReplaced",
-          imageId: existing.id,
-          previousStorageKey: existing.storageKey,
-          image,
-        },
+        { type: "ImageReplaced", imageId: existing.id, previousStorageKey: existing.storageKey },
       ];
     });
   }
 
   /** 取得した画像に新しいストレージのキーを振る。 */
-  #toImage(id: ImageId, url: ImageSourceUrl, { etag, ...file }: ParsedFetched): Image {
+  #toImage(id: ImageId, version: number, { etag, ...file }: ParsedFetched): Image {
     return {
       id,
+      version,
       storageKey: this.#ops.newStorageKey(id, file.contentType),
       ...file,
-      source: { url, etag },
+      source: { etag },
     };
   }
 

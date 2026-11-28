@@ -11,6 +11,8 @@ import type { SourceId } from "../../../value-objects/source-id.js";
  */
 export type CardSet = {
   readonly id: CardSetId;
+  /** 楽観ロックの版番号。集約は書き換えず、repository の save が読んだときの版と比べて 1 上げる。 */
+  readonly version: number;
   readonly sourceId: SourceId;
   readonly prefix: CardSetPrefix;
   readonly name: CardSetName;
