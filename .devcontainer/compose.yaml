@@ -1,6 +1,9 @@
 services:
   app:
-    image: mcr.microsoft.com/devcontainers/base:ubuntu
+    build:
+      # Dockerfile が package-lock.json を読むので、ビルドの起点をリポジトリの直下にする。
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
     # devcontainer.json の workspaceFolder が /workspaces/<リポジトリ名> を指すので、親ディレクトリごとマウントする
     volumes:
       - ../..:/workspaces:cached
